@@ -1,45 +1,73 @@
+import { useEffect, useState } from 'react';
+
 import { useApp } from '@/store';
 import MumbaiMap from '@/components/MumbaiMap';
 import BottomSheet from '@/components/BottomSheet';
 import TopBar from '@/components/TopBar';
 import Button from '@/components/Button';
-import { Check, AlertTriangle, Star, Zap, Eye, Navigation } from 'lucide-react';
+
+import { getRoutes } from '@/api';
+
+import {
+  Check,
+  AlertTriangle,
+  Navigation,
+} from 'lucide-react';
 
 type RouteId = 'accessible' | 'fastest' | 'clear';
 
-const ROUTE_META: Record<
-  RouteId,
-  { title: string; emoji: string; color: string; time: string; dist: string; tag: string; badge?: string }
-> = {
-  accessible: {
-    title: 'Most Accessible',
-    emoji: '⭐',
-    color: 'accessible',
-    time: '12 min',
-    dist: '2.1 km',
-    tag: 'No stairs · Ramp available · Smooth sidewalk',
-    badge: 'Recommended for you',
-  },
-  fastest: {
-    title: 'Fastest',
-    emoji: '⚡',
-    color: 'primary',
-    time: '9 min',
-    dist: '1.8 km',
-    tag: 'Stairs · Uneven sidewalk',
-  },
-  clear: {
-    title: 'Clear Route',
-    emoji: '👁',
-    color: 'warning',
-    time: '14 min',
-    dist: '2.4 km',
-    tag: 'Fewer obstacles · Clear crossings · Better visibility',
-  },
-};
+interface RouteFeature {
+  text: string;
+  ok: boolean;
+}
+
+interface RouteData {
+  id: RouteId;
+  title: string;
+  emoji: string;
+  color: string;
+  time: string;
+  dist: string;
+  tag: string;
+  badge?: string;
+  features: RouteFeature[];
+}
 
 export default function Routes() {
-  const { destination, selectedRoute, setSelectedRoute, go, mode } = useApp();
+  const {
+    destination,
+    selectedRoute,
+    setSelectedRoute,
+    go,
+    mode,
+  } = useApp();
+
+  const [routes, setRoutes] = useState<RouteData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!destination) return;
+
+    async function loadRoutes() {
+      try {
+        setLoading(true);
+        setError('');
+
+        const data = await getRoutes(destination.id);
+
+        setRoutes(data);
+      } catch (err) {
+        console.error('Failed to load routes:', err);
+        setError('Unable to load routes.');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadRoutes();
+  }, [destination]);
+
   if (!destination) return null;
 
   return (
@@ -53,89 +81,142 @@ export default function Routes() {
         />
       </div>
 
-      <TopBar onBack={() => go('destination')} transparent />
+      <TopBar
+        onBack={() => go('destination')}
+        transparent
+      />
 
       {/* Route legend */}
       <div className="absolute right-4 top-16 z-10 space-y-1.5 rounded-2xl bg-white/95 p-3 shadow-card backdrop-blur">
-        {(['accessible', 'fastest', 'clear'] as RouteId[]).map((r) => (
-          <div key={r} className="flex items-center gap-2 text-xs font-semibold">
+        {routes.map((route) => (
+          <div
+            key={route.id}
+            className="flex items-center gap-2 text-xs font-semibold"
+          >
             <span
-              className="h-1 w-5 rounded-full"
-              style={{
-                background:
-                  r === 'accessible' ? '#10b981' : r === 'fastest' ? '#4f46e5' : '#f59e0b',
-              }}
+              className={`h-1 w-5 rounded-full ${
+                route.id === 'accessible'
+                  ? 'bg-accessible-500'
+                  : route.id === 'fastest'
+                    ? 'bg-primary-600'
+                    : 'bg-warning-500'
+              }`}
             />
-            <span className="text-slate-600">{ROUTE_META[r].title}</span>
+
+            <span className="text-slate-600">
+              {route.title}
+            </span>
           </div>
         ))}
       </div>
 
       <BottomSheet open maxHeight="68%">
-        <h2 className="mb-1 text-xl font-extrabold text-slate-900">Choose your route</h2>
-        <p className="mb-3 text-xs text-slate-500">to {destination.name}</p>
+        <h2 className="mb-1 text-xl font-extrabold text-slate-900">
+          Choose your route
+        </h2>
 
-        <div className="space-y-2.5">
-          {(['accessible', 'fastest', 'clear'] as RouteId[]).map((id) => {
-            const meta = ROUTE_META[id];
-            const selected = selectedRoute === id;
-            const isAccessible = id === 'accessible';
-            const isFastest = id === 'fastest';
-            return (
-              <button
-                key={id}
-                onClick={() => setSelectedRoute(id)}
-                className={`w-full rounded-2xl border-2 p-4 text-left transition-all active:scale-[0.99] ${
-                  selected ? 'border-primary-600 bg-primary-50 shadow-card' : 'border-slate-200 bg-white'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl">{meta.emoji}</span>
-                    <span className="text-base font-extrabold uppercase tracking-wide text-slate-900">
-                      {meta.title}
-                    </span>
+        <p className="mb-3 text-xs text-slate-500">
+          to {destination.name}
+        </p>
+
+        {loading && (
+          <div className="py-10 text-center">
+            <div className="mx-auto h-7 w-7 animate-spin rounded-full border-4 border-slate-200 border-t-primary-600" />
+
+            <p className="mt-3 text-sm text-slate-500">
+              Loading routes...
+            </p>
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="py-10 text-center">
+            <p className="text-sm font-semibold text-danger-500">
+              {error}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-400">
+              Make sure the FastAPI backend is running.
+            </p>
+          </div>
+        )}
+
+        {!loading && !error && routes.length === 0 && (
+          <div className="py-10 text-center">
+            <p className="text-sm text-slate-500">
+              No routes available for this destination.
+            </p>
+          </div>
+        )}
+
+        {!loading && !error && routes.length > 0 && (
+          <div className="space-y-2.5">
+            {routes.map((route) => {
+              const selected = selectedRoute === route.id;
+
+              return (
+                <button
+                  key={route.id}
+                  onClick={() => setSelectedRoute(route.id)}
+                  className={`w-full rounded-2xl border-2 p-4 text-left transition-all active:scale-[0.99] ${
+                    selected
+                      ? 'border-primary-600 bg-primary-50 shadow-card'
+                      : 'border-slate-200 bg-white'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">
+                        {route.emoji}
+                      </span>
+
+                      <span className="text-base font-extrabold uppercase tracking-wide text-slate-900">
+                        {route.title}
+                      </span>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-slate-900">
+                        {route.time}
+                      </p>
+
+                      <p className="text-xs text-slate-500">
+                        {route.dist}
+                      </p>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm font-bold text-slate-900">{meta.time}</p>
-                    <p className="text-xs text-slate-500">{meta.dist}</p>
+
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {route.features.map((feature) => (
+                      <Pill
+                        key={feature.text}
+                        ok={feature.ok}
+                      >
+                        {feature.text}
+                      </Pill>
+                    ))}
                   </div>
-                </div>
 
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {isAccessible && (
-                    <>
-                      <Pill ok>No stairs</Pill>
-                      <Pill ok>Ramp available</Pill>
-                      <Pill ok>Smooth sidewalk</Pill>
-                    </>
+                  {route.badge && (
+                    <p className="mt-2 text-xs font-bold text-accessible-700">
+                      ✓ {route.badge}
+                    </p>
                   )}
-                  {isFastest && (
-                    <>
-                      <Pill>Stairs</Pill>
-                      <Pill>Uneven sidewalk</Pill>
-                    </>
-                  )}
-                  {!isAccessible && !isFastest && (
-                    <>
-                      <Pill ok>Fewer obstacles</Pill>
-                      <Pill ok>Clear crossings</Pill>
-                      <Pill ok>Better visibility</Pill>
-                    </>
-                  )}
-                </div>
-
-                {meta.badge && (
-                  <p className="mt-2 text-xs font-bold text-accessible-700">✓ {meta.badge}</p>
-                )}
-              </button>
-            );
-          })}
-        </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         <div className="mt-4">
-          <Button fullWidth onClick={() => go('navigation')} className="text-lg">
-            <Navigation size={18} /> Start Route
+          <Button
+            fullWidth
+            disabled={loading || !!error || routes.length === 0}
+            onClick={() => go('navigation')}
+            className="text-lg"
+          >
+            <Navigation size={18} />
+            Start Route
           </Button>
         </div>
       </BottomSheet>
@@ -143,14 +224,33 @@ export default function Routes() {
   );
 }
 
-function Pill({ children, ok }: { children: React.ReactNode; ok?: boolean }) {
+function Pill({
+  children,
+  ok,
+}: {
+  children: React.ReactNode;
+  ok?: boolean;
+}) {
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
-        ok ? 'bg-accessible-100 text-accessible-700' : 'bg-danger-100 text-danger-700'
+        ok
+          ? 'bg-accessible-100 text-accessible-700'
+          : 'bg-danger-100 text-danger-700'
       }`}
     >
-      {ok ? <Check size={11} strokeWidth={3} /> : <AlertTriangle size={11} strokeWidth={3} />}
+      {ok ? (
+        <Check
+          size={11}
+          strokeWidth={3}
+        />
+      ) : (
+        <AlertTriangle
+          size={11}
+          strokeWidth={3}
+        />
+      )}
+
       {children}
     </span>
   );

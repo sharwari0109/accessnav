@@ -1,6 +1,8 @@
 export type ScreenName =
   | 'splash'
   | 'welcome'
+  | 'login'
+  | 'register'
   | 'setup'
   | 'home'
   | 'search'
@@ -23,9 +25,11 @@ export interface Place {
   score: number;
   tags: string[];
   warnings: string[];
+
   /** position on the map in viewBox coordinates (0..390 x, 0..644 y) */
   x: number;
   y: number;
+
   emoji: string;
 }
 
