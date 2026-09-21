@@ -26,9 +26,13 @@ export interface Place {
   tags: string[];
   warnings: string[];
 
-  /** position on the map in viewBox coordinates (0..390 x, 0..644 y) */
+  // Existing coordinates used by the original AccessMob UI
   x: number;
   y: number;
+
+  // Real geographic coordinates used by Leaflet/OpenStreetMap
+  latitude: number;
+  longitude: number;
 
   emoji: string;
 }

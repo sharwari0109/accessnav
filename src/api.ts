@@ -22,7 +22,7 @@ export function removeToken() {
 
 async function apiFetch(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
 ) {
   const token = getToken();
 
@@ -33,20 +33,30 @@ async function apiFetch(
   }
 
   if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
+    headers.set(
+      "Authorization",
+      `Bearer ${token}`,
+    );
   }
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    ...options,
-    headers,
-  });
+  const response = await fetch(
+    `${API_URL}${endpoint}`,
+    {
+      ...options,
+      headers,
+    },
+  );
 
   if (!response.ok) {
     let message = "API request failed";
 
     try {
-      const errorData = await response.json();
-      message = errorData.detail || message;
+      const errorData =
+        await response.json();
+
+      message =
+        errorData.detail ||
+        message;
     } catch {
       // Ignore JSON parsing errors
     }
@@ -80,21 +90,34 @@ export interface LoginRequest {
   password: string;
 }
 
-export async function registerUser(data: RegisterRequest) {
-  return apiFetch("/api/auth/register", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+export async function registerUser(
+  data: RegisterRequest,
+) {
+  return apiFetch(
+    "/api/auth/register",
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    },
+  );
 }
 
-export async function loginUser(data: LoginRequest) {
-  const result = await apiFetch("/api/auth/login", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+export async function loginUser(
+  data: LoginRequest,
+) {
+  const result =
+    await apiFetch(
+      "/api/auth/login",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    );
 
   if (result.access_token) {
-    saveToken(result.access_token);
+    saveToken(
+      result.access_token,
+    );
   }
 
   return result;
@@ -120,8 +143,54 @@ export async function getPlaces() {
   return apiFetch("/api/places");
 }
 
-export async function getPlace(placeId: string) {
-  return apiFetch(`/api/places/${placeId}`);
+export async function getPlace(
+  placeId: string,
+) {
+  return apiFetch(
+    `/api/places/${placeId}`,
+  );
+}
+
+// -----------------------------
+// Accessibility
+// -----------------------------
+
+export interface AccessibilityPoint {
+  id: string;
+  type: string;
+  name: string;
+  description: string;
+  latitude: number;
+  longitude: number;
+  accessible: boolean;
+  wheelchair: boolean;
+  lowvision: boolean;
+  severity: string;
+}
+
+export interface AccessibilityResponse {
+  placeId: string;
+  placeName: string;
+
+  wheelchair: {
+    accessible: boolean;
+    points: AccessibilityPoint[];
+  };
+
+  lowvision: {
+    accessible: boolean;
+    points: AccessibilityPoint[];
+  };
+
+  dataAvailable: boolean;
+}
+
+export async function getPlaceAccessibility(
+  placeId: string,
+): Promise<AccessibilityResponse> {
+  return apiFetch(
+    `/api/places/${placeId}/accessibility`,
+  );
 }
 
 // -----------------------------
@@ -136,8 +205,12 @@ export async function getSavedPlaces() {
 // Routes
 // -----------------------------
 
-export async function getRoutes(placeId: string) {
-  return apiFetch(`/api/routes/${placeId}`);
+export async function getRoutes(
+  placeId: string,
+) {
+  return apiFetch(
+    `/api/routes/${placeId}`,
+  );
 }
 
 // -----------------------------
@@ -148,8 +221,12 @@ export async function getNavigation() {
   return apiFetch("/api/navigation");
 }
 
-export async function getNavigationStep(step: number) {
-  return apiFetch(`/api/navigation/${step}`);
+export async function getNavigationStep(
+  step: number,
+) {
+  return apiFetch(
+    `/api/navigation/${step}`,
+  );
 }
 
 // -----------------------------
@@ -157,7 +234,9 @@ export async function getNavigationStep(step: number) {
 // -----------------------------
 
 export async function getReportOptions() {
-  return apiFetch("/api/report-options");
+  return apiFetch(
+    "/api/report-options",
+  );
 }
 
 export interface ReportRequest {
@@ -166,11 +245,16 @@ export interface ReportRequest {
   description?: string;
 }
 
-export async function submitReport(report: ReportRequest) {
-  return apiFetch("/api/reports", {
-    method: "POST",
-    body: JSON.stringify(report),
-  });
+export async function submitReport(
+  report: ReportRequest,
+) {
+  return apiFetch(
+    "/api/reports",
+    {
+      method: "POST",
+      body: JSON.stringify(report),
+    },
+  );
 }
 
 export async function getReports() {
