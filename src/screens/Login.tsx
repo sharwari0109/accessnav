@@ -1,53 +1,98 @@
 import { useState } from 'react';
-import { loginUser } from '@/api';
+
+import {
+  loginUser,
+  getCurrentUser,
+} from '@/api';
+
 import { useApp } from '@/store';
 
+
 export default function Login() {
-  const { go } = useApp();
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const {
+    go,
+    setUser,
+  } = useApp();
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
 
-  async function handleLogin(e: React.FormEvent) {
+  const [email, setEmail] =
+    useState('');
+
+  const [password, setPassword] =
+    useState('');
+
+  const [loading, setLoading] =
+    useState(false);
+
+  const [error, setError] =
+    useState('');
+
+
+  async function handleLogin(
+    e: React.FormEvent
+  ) {
+
     e.preventDefault();
 
     setError('');
 
+
     if (!email || !password) {
-      setError('Please enter email and password.');
+
+      setError(
+        'Please enter email and password.'
+      );
+
       return;
     }
 
+
     try {
+
       setLoading(true);
 
+
+      // Login and save JWT
       await loginUser({
         email,
         password,
       });
 
-      // Login successful
+
+      // Get actual user
+      const currentUser =
+        await getCurrentUser();
+
+
+      // Store user in global state
+      setUser(currentUser);
+
+
+      // Continue your existing flow
       go('setup');
 
     } catch (err) {
+
       setError(
         err instanceof Error
           ? err.message
           : 'Login failed. Please try again.'
       );
+
     } finally {
+
       setLoading(false);
+
     }
   }
+
 
   return (
     <div className="flex h-full flex-col bg-white px-6 py-8">
 
-      {/* Header */}
       <div className="mb-8">
+
         <button
           onClick={() => go('welcome')}
           className="mb-6 text-2xl text-slate-700"
@@ -62,9 +107,10 @@ export default function Login() {
         <p className="mt-2 text-slate-500">
           Login to continue using AccessMob
         </p>
+
       </div>
 
-      {/* Login form */}
+
       <form
         onSubmit={handleLogin}
         className="flex flex-1 flex-col"
@@ -72,8 +118,8 @@ export default function Login() {
 
         <div className="space-y-5">
 
-          {/* Email */}
           <div>
+
             <label className="mb-2 block text-sm font-medium text-slate-700">
               Email
             </label>
@@ -81,7 +127,9 @@ export default function Login() {
             <input
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) =>
+                setEmail(e.target.value)
+              }
               placeholder="Enter your email"
               className="
                 w-full
@@ -97,10 +145,12 @@ export default function Login() {
                 focus:ring-blue-100
               "
             />
+
           </div>
 
-          {/* Password */}
+
           <div>
+
             <label className="mb-2 block text-sm font-medium text-slate-700">
               Password
             </label>
@@ -108,7 +158,9 @@ export default function Login() {
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) =>
+                setPassword(e.target.value)
+              }
               placeholder="Enter your password"
               className="
                 w-full
@@ -124,9 +176,10 @@ export default function Login() {
                 focus:ring-blue-100
               "
             />
+
           </div>
 
-          {/* Error */}
+
           {error && (
             <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">
               {error}
@@ -135,7 +188,7 @@ export default function Login() {
 
         </div>
 
-        {/* Bottom section */}
+
         <div className="mt-auto pt-8">
 
           <button
@@ -155,10 +208,14 @@ export default function Login() {
               disabled:opacity-60
             "
           >
-            {loading ? 'Logging in...' : 'Login'}
+            {loading
+              ? 'Logging in...'
+              : 'Login'}
           </button>
 
+
           <p className="mt-5 text-center text-sm text-slate-500">
+
             Don't have an account?{' '}
 
             <button
@@ -168,6 +225,7 @@ export default function Login() {
             >
               Create account
             </button>
+
           </p>
 
         </div>

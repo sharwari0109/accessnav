@@ -7,7 +7,13 @@ import BottomNav from '@/components/BottomNav';
 import Toggle from '@/components/Toggle';
 
 export default function Profile() {
-  const { go, mode, setMode } = useApp();
+  const {
+    go,
+    mode,
+    setMode,
+    user,
+    logout,
+  } = useApp();
 
   const [prefs, setPrefs] = useState({
     mostAccessible: true,
@@ -33,7 +39,9 @@ export default function Profile() {
     }));
   };
 
-  const changeMode = (newMode: 'wheelchair' | 'lowvision') => {
+  const changeMode = (
+    newMode: 'wheelchair' | 'lowvision'
+  ) => {
     setMode(newMode);
 
     if (newMode === 'lowvision') {
@@ -71,16 +79,21 @@ export default function Profile() {
 
         <div className="flex flex-col items-center">
 
+          {/* Profile avatar */}
           <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary-600 text-2xl font-extrabold text-white shadow-card">
-            RT
+            {user?.name
+              ? user.name.charAt(0).toUpperCase()
+              : 'U'}
           </div>
 
+          {/* User name */}
           <h2 className="mt-3 text-lg font-extrabold text-slate-900">
-            RAIT
+            {user?.name || 'User'}
           </h2>
 
+          {/* User email */}
           <p className="text-sm text-slate-500">
-            RAIT_2026@gmail.com
+            {user?.email || ''}
           </p>
 
         </div>
@@ -94,35 +107,39 @@ export default function Profile() {
 
           <div className="flex gap-2">
 
-            {(['wheelchair', 'lowvision'] as const).map((currentMode) => (
-              <button
-                key={currentMode}
-                onClick={() => changeMode(currentMode)}
-                className={`flex-1 rounded-xl border-2 p-3 text-center transition ${
-                  mode === currentMode
-                    ? 'border-primary-600 bg-primary-50'
-                    : 'border-slate-200 bg-white'
-                }`}
-              >
-
-                <span className="text-2xl">
-                  {currentMode === 'wheelchair' ? '♿' : '👁'}
-                </span>
-
-                <p
-                  className={`mt-1 text-xs font-bold ${
+            {(['wheelchair', 'lowvision'] as const).map(
+              (currentMode) => (
+                <button
+                  key={currentMode}
+                  onClick={() => changeMode(currentMode)}
+                  className={`flex-1 rounded-xl border-2 p-3 text-center transition ${
                     mode === currentMode
-                      ? 'text-primary-700'
-                      : 'text-slate-600'
+                      ? 'border-primary-600 bg-primary-50'
+                      : 'border-slate-200 bg-white'
                   }`}
                 >
-                  {currentMode === 'wheelchair'
-                    ? 'Wheelchair'
-                    : 'Low Vision'}
-                </p>
 
-              </button>
-            ))}
+                  <span className="text-2xl">
+                    {currentMode === 'wheelchair'
+                      ? '♿'
+                      : '👁'}
+                  </span>
+
+                  <p
+                    className={`mt-1 text-xs font-bold ${
+                      mode === currentMode
+                        ? 'text-primary-700'
+                        : 'text-slate-600'
+                    }`}
+                  >
+                    {currentMode === 'wheelchair'
+                      ? 'Wheelchair'
+                      : 'Low Vision'}
+                  </p>
+
+                </button>
+              )
+            )}
 
           </div>
 
@@ -146,55 +163,73 @@ export default function Profile() {
           <Row
             label="Most accessible route"
             on={prefs.mostAccessible}
-            onChange={() => toggle('mostAccessible')}
+            onChange={() =>
+              toggle('mostAccessible')
+            }
           />
 
           <Row
             label="Avoid stairs"
             on={prefs.avoidStairs}
-            onChange={() => toggle('avoidStairs')}
+            onChange={() =>
+              toggle('avoidStairs')
+            }
           />
 
           <Row
             label="Prefer ramps"
             on={prefs.preferRamps}
-            onChange={() => toggle('preferRamps')}
+            onChange={() =>
+              toggle('preferRamps')
+            }
           />
 
           <Row
             label="Prefer elevators"
             on={prefs.preferElevators}
-            onChange={() => toggle('preferElevators')}
+            onChange={() =>
+              toggle('preferElevators')
+            }
           />
 
           <Row
             label="Avoid steep slopes"
             on={prefs.avoidSteepSlopes}
-            onChange={() => toggle('avoidSteepSlopes')}
+            onChange={() =>
+              toggle('avoidSteepSlopes')
+            }
           />
 
           <Row
             label="High contrast"
             on={prefs.highContrast}
-            onChange={() => toggle('highContrast')}
+            onChange={() =>
+              toggle('highContrast')
+            }
           />
 
           <Row
             label="Voice navigation"
             on={prefs.voiceNav}
-            onChange={() => toggle('voiceNav')}
+            onChange={() =>
+              toggle('voiceNav')
+            }
           />
 
           <Row
             label="Clear crossings"
             on={prefs.clearCrossings}
-            onChange={() => toggle('clearCrossings')}
+            onChange={() =>
+              toggle('clearCrossings')
+            }
           />
 
           <Row
             label="Avoid complicated intersections"
             on={prefs.avoidIntersections}
-            onChange={() => toggle('avoidIntersections')}
+            onChange={() =>
+              toggle('avoidIntersections')
+            }
           />
 
         </Section>
@@ -209,24 +244,63 @@ export default function Profile() {
           <Row
             label="Large text"
             on={prefs.largeText}
-            onChange={() => toggle('largeText')}
+            onChange={() =>
+              toggle('largeText')
+            }
           />
 
           <Row
             label="High contrast"
             on={prefs.appHighContrast}
-            onChange={() => toggle('appHighContrast')}
+            onChange={() =>
+              toggle('appHighContrast')
+            }
           />
 
           <Row
             label="Voice guidance"
             on={prefs.appVoice}
-            onChange={() => toggle('appVoice')}
+            onChange={() =>
+              toggle('appVoice')
+            }
           />
 
         </Section>
 
+
+        {/* ==================================================
+            LOGOUT
+        ================================================== */}
+
+        <div className="mt-6">
+
+          <button
+            onClick={logout}
+            className="
+              w-full
+              rounded-xl
+              border
+              border-red-200
+              bg-red-50
+              py-3
+              text-sm
+              font-bold
+              text-red-600
+              transition
+              hover:bg-red-100
+            "
+          >
+            Logout
+          </button>
+
+        </div>
+
       </div>
+
+
+      {/* ====================================================
+          BOTTOM NAVIGATION
+      ==================================================== */}
 
       <BottomNav />
 

@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useState,
   type ReactNode,
 } from 'react';
@@ -11,31 +12,36 @@ import type {
   Place,
 } from './types';
 
+import {
+  getCurrentUser,
+  getToken,
+  removeToken,
+} from './api';
+
 
 // ============================================================
 // DESTINATION
 // ============================================================
 
 export interface Destination {
-  /*
-   * Name displayed to the user.
-   */
   name: string;
-
-  /*
-   * Real geographic coordinates.
-   */
   lat: number;
   lng: number;
-
-  /*
-   * If this destination exists in our accessibility database,
-   * this contains the full Place record.
-   *
-   * For an arbitrary OpenStreetMap/Nominatim result,
-   * this is undefined.
-   */
   place?: Place;
+}
+
+
+// ============================================================
+// USER
+// ============================================================
+
+export interface User {
+  id?: string;
+  _id?: string;
+  name?: string;
+  email?: string;
+
+  [key: string]: unknown;
 }
 
 
@@ -45,36 +51,45 @@ export interface Destination {
 
 interface AppState {
   screen: ScreenName;
-
   go: (s: ScreenName) => void;
 
-  mode: AccessibilityMode;
+  // Authentication
+  user: User | null;
+  setUser: (user: User | null) => void;
+  authLoading: boolean;
+  logout: () => void;
 
+  // Accessibility
+  mode: AccessibilityMode;
   setMode: (m: AccessibilityMode) => void;
 
+  // Destination
   destination: Destination | null;
-
   setDestination: (destination: Destination) => void;
 
+  // Route
   selectedRoute:
     | 'accessible'
     | 'fastest'
     | 'clear';
 
   setSelectedRoute: (
-    r: 'accessible' | 'fastest' | 'clear',
+    r:
+      | 'accessible'
+      | 'fastest'
+      | 'clear'
   ) => void;
 
+  // Navigation
   navStep: number;
-
   setNavStep: (n: number) => void;
 
+  // Pause
   paused: boolean;
-
   setPaused: (p: boolean) => void;
 
+  // SOS
   sosActive: boolean;
-
   setSosActive: (a: boolean) => void;
 }
 
@@ -95,8 +110,15 @@ export function AppProvider({
 }: {
   children: ReactNode;
 }) {
+
   const [screen, setScreen] =
     useState<ScreenName>('splash');
+
+  const [user, setUser] =
+    useState<User | null>(null);
+
+  const [authLoading, setAuthLoading] =
+    useState(true);
 
   const [mode, setMode] =
     useState<AccessibilityMode>('wheelchair');
@@ -122,16 +144,138 @@ export function AppProvider({
 
 
   // ==========================================================
+  // RESTORE LOGIN SESSION
+  // ==========================================================
+
+  useEffect(() => {
+
+    async function restoreSession() {
+
+      const token = getToken();
+
+
+      // ------------------------------------------------------
+      // No token
+      //
+      // This means the user has NOT logged in.
+      //
+      // IMPORTANT:
+      // Keep screen as "splash".
+      //
+      // Splash will show:
+      // Splash → Welcome → Login
+      // ------------------------------------------------------
+
+      if (!token) {
+
+        setAuthLoading(false);
+
+        return;
+      }
+
+
+      // ------------------------------------------------------
+      // Token exists
+      //
+      // Verify token with backend.
+      // ------------------------------------------------------
+
+      try {
+
+        console.log(
+          'Restoring saved login session...'
+        );
+
+
+        const currentUser =
+          await getCurrentUser();
+
+
+        console.log(
+          'User session restored:',
+          currentUser
+        );
+
+
+        setUser(currentUser);
+
+
+        // ----------------------------------------------------
+        // User was already logged in.
+        //
+        // Skip Login/Welcome and go to Home.
+        // ----------------------------------------------------
+
+        setScreen('home');
+
+      } catch (error) {
+
+        console.error(
+          'Saved session is invalid:',
+          error
+        );
+
+
+        // Token is invalid/expired.
+        removeToken();
+
+        setUser(null);
+
+
+        // Go through normal logged-out flow.
+        setScreen('splash');
+
+      } finally {
+
+        setAuthLoading(false);
+
+      }
+    }
+
+
+    restoreSession();
+
+  }, []);
+
+
+  // ==========================================================
+  // LOGOUT
+  // ==========================================================
+
+  const logout = () => {
+
+    console.log('User logged out');
+
+
+    // Remove JWT
+    removeToken();
+
+
+    // Remove current user
+    setUser(null);
+
+
+    // Reset application state
+    setDestination(null);
+    setNavStep(0);
+    setPaused(false);
+    setSosActive(false);
+
+
+    // IMPORTANT:
+    // Go to Login directly after logout.
+    setScreen('login');
+  };
+
+
+  // ==========================================================
   // NAVIGATION
   // ==========================================================
 
   const go = (s: ScreenName) => {
+
     setScreen(s);
 
-    /*
-     * Whenever navigation starts, begin from the first
-     * navigation instruction.
-     */
     if (s === 'navigation') {
       setNavStep(0);
     }
@@ -145,8 +289,14 @@ export function AppProvider({
   return (
     <Ctx.Provider
       value={{
+
         screen,
         go,
+
+        user,
+        setUser,
+        authLoading,
+        logout,
 
         mode,
         setMode,
@@ -178,11 +328,12 @@ export function AppProvider({
 // ============================================================
 
 export function useApp() {
+
   const context = useContext(Ctx);
 
   if (!context) {
     throw new Error(
-      'useApp must be used within AppProvider',
+      'useApp must be used within AppProvider'
     );
   }
 

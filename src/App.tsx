@@ -1,6 +1,9 @@
 import { useEffect } from 'react';
 
-import { AppProvider, useApp } from '@/store';
+import {
+  AppProvider,
+  useApp,
+} from '@/store';
 
 import Splash from '@/screens/Splash';
 import Welcome from '@/screens/Welcome';
@@ -23,65 +26,149 @@ import type { ScreenName } from '@/types';
 import { checkBackend } from '@/api';
 
 
-const SCREENS: Record<ScreenName, () => JSX.Element | null> = {
+// ============================================================
+// SCREEN MAP
+// ============================================================
+
+const SCREENS: Record<
+  ScreenName,
+  () => JSX.Element | null
+> = {
+
   splash: Splash,
+
   welcome: Welcome,
+
   login: Login,
+
   register: Register,
+
   setup: Setup,
+
   home: Home,
+
   search: Search,
+
   destination: Destination,
+
   routes: Routes,
+
   navigation: Navigation,
+
   details: Details,
+
   report: Report,
+
   saved: Saved,
+
   profile: Profile,
+
   sos: SOS,
 };
 
 
-function Router() {
-  const { screen } = useApp();
+// ============================================================
+// ROUTER
+// ============================================================
 
-  const Screen = SCREENS[screen] ?? Splash;
+function Router() {
+
+  const {
+    screen,
+    authLoading,
+  } = useApp();
+
+
+  // ----------------------------------------------------------
+  // While checking whether a previous login exists,
+  // show the splash screen.
+  // ----------------------------------------------------------
+
+  if (authLoading) {
+    return <Splash />;
+  }
+
+
+  // ----------------------------------------------------------
+  // Render current screen
+  // ----------------------------------------------------------
+
+  const Screen =
+    SCREENS[screen] ?? Splash;
+
 
   return <Screen />;
 }
 
 
+// ============================================================
+// BACKEND CONNECTION TEST
+// ============================================================
+
 function BackendConnectionTest() {
+
   useEffect(() => {
+
     checkBackend()
+
       .then((data) => {
+
         console.log(
           'Backend connected successfully:',
           data
         );
+
       })
+
       .catch((error) => {
+
         console.error(
           'Backend connection failed:',
           error
         );
+
       });
+
   }, []);
+
 
   return null;
 }
 
 
+// ============================================================
+// APP
+// ============================================================
+
 function App() {
+
   return (
     <AppProvider>
 
-      {/* Test connection between React frontend and FastAPI backend */}
+      {/* ----------------------------------------------------
+          Test connection between React and FastAPI
+      ----------------------------------------------------- */}
+
       <BackendConnectionTest />
 
-      <div className="flex min-h-screen items-center justify-center bg-slate-900 p-0 sm:p-6">
 
-        {/* Phone frame: 390 × 844 */}
+      <div
+        className="
+          flex
+          min-h-screen
+          items-center
+          justify-center
+          bg-slate-900
+          p-0
+          sm:p-6
+        "
+      >
+
+        {/* --------------------------------------------------
+            Phone frame
+            390 × 844
+        --------------------------------------------------- */}
+
         <div
           className="
             relative
@@ -89,6 +176,7 @@ function App() {
             w-full
             overflow-hidden
             bg-white
+
             sm:h-[844px]
             sm:max-h-[100dvh]
             sm:w-[390px]
@@ -99,7 +187,10 @@ function App() {
           "
         >
 
-          {/* Notch (desktop only) */}
+          {/* ------------------------------------------------
+              Notch - desktop only
+          ------------------------------------------------- */}
+
           <div
             className="
               pointer-events-none
@@ -116,6 +207,11 @@ function App() {
               sm:block
             "
           />
+
+
+          {/* ------------------------------------------------
+              Application screens
+          ------------------------------------------------- */}
 
           <Router />
 
