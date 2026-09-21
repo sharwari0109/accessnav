@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 
 import { useApp } from '@/store';
 import Overlay from '@/components/Overlay';
@@ -34,20 +41,46 @@ interface RoutePoint {
   lng: number;
 }
 
-interface RouteResponse {
-  code: string;
-  routes?: Array<{
-    distance: number;
-    duration: number;
-    geometry: {
-      coordinates: [number, number][];
-    };
+interface OSRMManeuver {
+  location: [number, number];
+  bearing_before?: number;
+  bearing_after?: number;
+  type: string;
+  modifier?: string;
+  exit?: number;
+}
+
+interface OSRMStep {
+  distance: number;
+  duration: number;
+  name?: string;
+  mode?: string;
+  maneuver: OSRMManeuver;
+}
+
+interface OSRMRoute {
+  distance: number;
+  duration: number;
+  geometry: {
+    coordinates: [number, number][];
+  };
+  legs?: Array<{
+    steps?: OSRMStep[];
   }>;
 }
 
+interface RouteResponse {
+  code: string;
+  routes?: OSRMRoute[];
+}
+
 function formatDistance(meters: number) {
+  if (!Number.isFinite(meters)) {
+    return '0 m';
+  }
+
   if (meters < 1000) {
-    return `${Math.round(meters)} m`;
+    return `${Math.max(0, Math.round(meters))} m`;
   }
 
   return `${(meters / 1000).toFixed(1)} km`;
@@ -68,6 +101,66 @@ function formatDuration(seconds: number) {
   }
 
   return `${hours} hr ${remaining} min`;
+}
+
+function haversineDistance(
+  first: RoutePoint,
+  second: RoutePoint,
+) {
+  const earthRadius = 6371000;
+
+  const lat1 = (first.lat * Math.PI) / 180;
+  const lat2 = (second.lat * Math.PI) / 180;
+
+  const deltaLat =
+    ((second.lat - first.lat) * Math.PI) / 180;
+
+  const deltaLng =
+    ((second.lng - first.lng) * Math.PI) / 180;
+
+  const a =
+    Math.sin(deltaLat / 2) *
+      Math.sin(deltaLat / 2) +
+    Math.cos(lat1) *
+      Math.cos(lat2) *
+      Math.sin(deltaLng / 2) *
+      Math.sin(deltaLng / 2);
+
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(a),
+      Math.sqrt(1 - a),
+    );
+
+  return earthRadius * c;
+}
+
+function distanceToPolyline(
+  location: RoutePoint,
+  coordinates: [number, number][],
+) {
+  if (coordinates.length === 0) {
+    return Infinity;
+  }
+
+  let minimumDistance = Infinity;
+
+  for (const [lat, lng] of coordinates) {
+    const distance = haversineDistance(
+      location,
+      {
+        lat,
+        lng,
+      },
+    );
+
+    if (distance < minimumDistance) {
+      minimumDistance = distance;
+    }
+  }
+
+  return minimumDistance;
 }
 
 function createCurrentLocationIcon() {
@@ -118,7 +211,34 @@ function createDestinationIcon() {
   });
 }
 
-function FollowRoute({
+function FollowCurrentLocation({
+  currentLocation,
+}: {
+  currentLocation: RoutePoint | null;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!currentLocation) {
+      return;
+    }
+
+    map.setView(
+      [
+        currentLocation.lat,
+        currentLocation.lng,
+      ],
+      Math.max(map.getZoom(), 17),
+      {
+        animate: true,
+      },
+    );
+  }, [currentLocation, map]);
+
+  return null;
+}
+
+function FitRoute({
   currentLocation,
   routeCoordinates,
 }: {
@@ -126,23 +246,29 @@ function FollowRoute({
   routeCoordinates: [number, number][];
 }) {
   const map = useMap();
+  const hasFittedRef = useRef(false);
 
   useEffect(() => {
-    if (!currentLocation || routeCoordinates.length < 2) {
+    if (
+      hasFittedRef.current ||
+      !currentLocation ||
+      routeCoordinates.length < 2
+    ) {
       return;
     }
 
     const bounds = L.latLngBounds(
-      routeCoordinates.map(([lat, lng]) => [
-        lat,
-        lng,
-      ]),
+      routeCoordinates.map(
+        ([lat, lng]) => [lat, lng],
+      ),
     );
 
     map.fitBounds(bounds, {
       padding: [40, 300],
       maxZoom: 17,
     });
+
+    hasFittedRef.current = true;
   }, [
     map,
     currentLocation,
@@ -150,6 +276,212 @@ function FollowRoute({
   ]);
 
   return null;
+}
+
+function maneuverSymbol(step: OSRMStep) {
+  const type = step.maneuver.type;
+  const modifier = step.maneuver.modifier;
+
+  if (type === 'arrive') {
+    return '✓';
+  }
+
+  if (
+    type === 'roundabout' ||
+    type === 'rotary'
+  ) {
+    return '↻';
+  }
+
+  if (type === 'uturn') {
+    return '↶';
+  }
+
+  if (modifier === 'left') {
+    return '←';
+  }
+
+  if (modifier === 'right') {
+    return '→';
+  }
+
+  if (modifier === 'slight left') {
+    return '↖';
+  }
+
+  if (modifier === 'slight right') {
+    return '↗';
+  }
+
+  if (modifier === 'sharp left') {
+    return '↙';
+  }
+
+  if (modifier === 'sharp right') {
+    return '↘';
+  }
+
+  return '↑';
+}
+
+function maneuverTitle(step: OSRMStep) {
+  const type = step.maneuver.type;
+  const modifier = step.maneuver.modifier;
+
+  if (type === 'arrive') {
+    return 'You have arrived';
+  }
+
+  if (type === 'depart') {
+    if (modifier === 'left') {
+      return 'Start by turning left';
+    }
+
+    if (modifier === 'right') {
+      return 'Start by turning right';
+    }
+
+    return 'Start navigation';
+  }
+
+  if (
+    type === 'roundabout' ||
+    type === 'rotary'
+  ) {
+    if (step.maneuver.exit) {
+      return `Take exit ${step.maneuver.exit}`;
+    }
+
+    return 'Continue through the roundabout';
+  }
+
+  if (type === 'uturn') {
+    return 'Make a U-turn';
+  }
+
+  if (type === 'merge') {
+    if (modifier === 'left') {
+      return 'Merge left';
+    }
+
+    if (modifier === 'right') {
+      return 'Merge right';
+    }
+
+    return 'Merge';
+  }
+
+  if (type === 'fork') {
+    if (modifier === 'left') {
+      return 'Keep left';
+    }
+
+    if (modifier === 'right') {
+      return 'Keep right';
+    }
+
+    return 'Continue at the fork';
+  }
+
+  if (type === 'on ramp') {
+    if (modifier === 'left') {
+      return 'Take the left ramp';
+    }
+
+    if (modifier === 'right') {
+      return 'Take the right ramp';
+    }
+
+    return 'Take the ramp';
+  }
+
+  if (type === 'off ramp') {
+    if (modifier === 'left') {
+      return 'Take the left exit ramp';
+    }
+
+    if (modifier === 'right') {
+      return 'Take the right exit ramp';
+    }
+
+    return 'Take the exit ramp';
+  }
+
+  if (type === 'end of road') {
+    if (modifier === 'left') {
+      return 'Turn left at the end of the road';
+    }
+
+    if (modifier === 'right') {
+      return 'Turn right at the end of the road';
+    }
+
+    return 'Continue at the end of the road';
+  }
+
+  if (modifier === 'left') {
+    return 'Turn left';
+  }
+
+  if (modifier === 'right') {
+    return 'Turn right';
+  }
+
+  if (modifier === 'slight left') {
+    return 'Bear left';
+  }
+
+  if (modifier === 'slight right') {
+    return 'Bear right';
+  }
+
+  if (modifier === 'sharp left') {
+    return 'Turn sharply left';
+  }
+
+  if (modifier === 'sharp right') {
+    return 'Turn sharply right';
+  }
+
+  if (type === 'continue') {
+    return 'Continue straight';
+  }
+
+  if (type === 'new name') {
+    return 'Continue straight';
+  }
+
+  return 'Continue straight';
+}
+
+function getStreetName(step: OSRMStep) {
+  if (
+    step.name &&
+    step.name.trim().length > 0
+  ) {
+    return step.name;
+  }
+
+  return 'Unnamed road';
+}
+
+function findInitialStep(
+  steps: OSRMStep[],
+) {
+  if (steps.length === 0) {
+    return -1;
+  }
+
+  const firstUsefulStep = steps.findIndex(
+    (step) =>
+      step.maneuver.type !== 'depart',
+  );
+
+  if (firstUsefulStep !== -1) {
+    return firstUsefulStep;
+  }
+
+  return 0;
 }
 
 export default function Navigation() {
@@ -174,6 +506,15 @@ export default function Navigation() {
   const [routeDuration, setRouteDuration] =
     useState(0);
 
+  const [routeSteps, setRouteSteps] =
+    useState<OSRMStep[]>([]);
+
+  const [currentStepIndex, setCurrentStepIndex] =
+    useState(-1);
+
+  const [nextStepDistance, setNextStepDistance] =
+    useState(0);
+
   const [loadingLocation, setLoadingLocation] =
     useState(true);
 
@@ -185,31 +526,35 @@ export default function Navigation() {
   const [arrived, setArrived] =
     useState(false);
 
-  /*
-   * Destination comes from the new global destination
-   * structure:
-   *
-   * {
-   *   name,
-   *   lat,
-   *   lng,
-   *   place?
-   * }
-   */
-  const destinationPoint = useMemo<RoutePoint | null>(() => {
-    if (!destination) {
-      return null;
-    }
+  const latestLocationRef =
+    useRef<RoutePoint | null>(null);
 
-    return {
-      lat: destination.lat,
-      lng: destination.lng,
-    };
-  }, [destination]);
+  const hasRouteRef = useRef(false);
+
+  const lastRerouteAtRef =
+    useRef(0);
+
+  const requestIdRef =
+    useRef(0);
+
+  const destinationPoint =
+    useMemo<RoutePoint | null>(() => {
+      if (!destination) {
+        return null;
+      }
+
+      return {
+        lat: destination.lat,
+        lng: destination.lng,
+      };
+    }, [destination]);
 
   /*
-   * Get the user's real GPS location.
+   * ------------------------------------------------------------
+   * LIVE GPS
+   * ------------------------------------------------------------
    */
+
   useEffect(() => {
     if (!navigator.geolocation) {
       setLoadingLocation(false);
@@ -225,11 +570,15 @@ export default function Navigation() {
     const watchId =
       navigator.geolocation.watchPosition(
         (position) => {
-          setCurrentLocation({
+          const location: RoutePoint = {
             lat: position.coords.latitude,
             lng: position.coords.longitude,
-          });
+          };
 
+          latestLocationRef.current =
+            location;
+
+          setCurrentLocation(location);
           setLoadingLocation(false);
         },
         (locationError) => {
@@ -282,28 +631,56 @@ export default function Navigation() {
   }, []);
 
   /*
-   * Calculate the real road route.
+   * ------------------------------------------------------------
+   * RESET ROUTE WHEN DESTINATION CHANGES
+   * ------------------------------------------------------------
    */
+
   useEffect(() => {
-    if (
-      !currentLocation ||
-      !destinationPoint
-    ) {
-      return;
-    }
+    hasRouteRef.current = false;
 
-    let cancelled = false;
+    setRouteCoordinates([]);
+    setRouteSteps([]);
+    setCurrentStepIndex(-1);
+    setNextStepDistance(0);
+    setArrived(false);
+    setError('');
+  }, [destinationPoint]);
 
-    async function calculateRoute() {
+  /*
+   * ------------------------------------------------------------
+   * OSRM TURN-BY-TURN ROUTE
+   * ------------------------------------------------------------
+   *
+   * Important:
+   * `steps=true` makes OSRM return actual maneuvers.
+   * This gives us left/right/straight/roundabout data.
+   */
+
+  const fetchRoute = useCallback(
+    async (
+      origin: RoutePoint,
+      showError = true,
+    ) => {
+      if (!destinationPoint) {
+        return;
+      }
+
+      const requestId =
+        ++requestIdRef.current;
+
       try {
         setLoadingRoute(true);
-        setError('');
+
+        if (showError) {
+          setError('');
+        }
 
         const url =
           `https://router.project-osrm.org/route/v1/driving/` +
-          `${currentLocation!.lng},${currentLocation!.lat};` +
-          `${destinationPoint!.lng},${destinationPoint!.lat}` +
-          `?overview=full&geometries=geojson`;
+          `${origin.lng},${origin.lat};` +
+          `${destinationPoint.lng},${destinationPoint.lat}` +
+          `?overview=full&geometries=geojson&steps=true`;
 
         const response = await fetch(url);
 
@@ -326,7 +703,9 @@ export default function Navigation() {
           );
         }
 
-        if (cancelled) {
+        if (
+          requestId !== requestIdRef.current
+        ) {
           return;
         }
 
@@ -341,135 +720,282 @@ export default function Navigation() {
               ],
           );
 
-        setRouteCoordinates(
-          coordinates,
+        const steps =
+          route.legs?.flatMap(
+            (leg) => leg.steps ?? [],
+          ) ?? [];
+
+        setRouteCoordinates(coordinates);
+        setRouteDistance(route.distance);
+        setRouteDuration(route.duration);
+        setRouteSteps(steps);
+
+        const initialStepIndex =
+          findInitialStep(steps);
+
+        setCurrentStepIndex(
+          initialStepIndex,
         );
 
-        setRouteDistance(
-          route.distance,
-        );
-
-        setRouteDuration(
-          route.duration,
-        );
-
-        /*
-         * Check approximate arrival distance.
-         */
         if (
-          route.distance < 30
+          initialStepIndex >= 0 &&
+          origin
         ) {
-          setArrived(true);
-        } else {
-          setArrived(false);
+          const maneuver =
+            steps[initialStepIndex]
+              ?.maneuver?.location;
+
+          if (maneuver) {
+            setNextStepDistance(
+              haversineDistance(
+                origin,
+                {
+                  lat: maneuver[1],
+                  lng: maneuver[0],
+                },
+              ),
+            );
+          }
         }
+
+        const directDistance =
+          haversineDistance(
+            origin,
+            destinationPoint,
+          );
+
+        setArrived(
+          directDistance <= 30 ||
+            route.distance <= 30,
+        );
+
+        hasRouteRef.current = true;
+        lastRerouteAtRef.current =
+          Date.now();
       } catch (err) {
         console.error(
           'Navigation route error:',
           err,
         );
 
-        if (!cancelled) {
+        if (showError) {
           setError(
             'Unable to calculate the navigation route.',
           );
         }
       } finally {
-        if (!cancelled) {
+        if (
+          requestId === requestIdRef.current
+        ) {
           setLoadingRoute(false);
         }
       }
+    },
+    [destinationPoint],
+  );
+
+  /*
+   * ------------------------------------------------------------
+   * INITIAL ROUTE
+   * ------------------------------------------------------------
+   */
+
+  useEffect(() => {
+    if (
+      !currentLocation ||
+      !destinationPoint ||
+      hasRouteRef.current
+    ) {
+      return;
     }
 
-    calculateRoute();
-
-    return () => {
-      cancelled = true;
-    };
+    fetchRoute(
+      currentLocation,
+      true,
+    );
   }, [
     currentLocation,
+    destinationPoint,
+    fetchRoute,
+  ]);
+
+  /*
+   * ------------------------------------------------------------
+   * UPDATE CURRENT TURN INSTRUCTION
+   * ------------------------------------------------------------
+   */
+
+  useEffect(() => {
+    if (
+      !currentLocation ||
+      routeSteps.length === 0 ||
+      currentStepIndex < 0 ||
+      paused ||
+      arrived
+    ) {
+      return;
+    }
+
+    let stepIndex = currentStepIndex;
+
+    /*
+     * If the current maneuver is close enough,
+     * advance to the next maneuver.
+     */
+    while (
+      stepIndex >= 0 &&
+      stepIndex < routeSteps.length
+    ) {
+      const step =
+        routeSteps[stepIndex];
+
+      const maneuverLocation =
+        step.maneuver?.location;
+
+      if (!maneuverLocation) {
+        break;
+      }
+
+      const distance =
+        haversineDistance(
+          currentLocation,
+          {
+            lat: maneuverLocation[1],
+            lng: maneuverLocation[0],
+          },
+        );
+
+      setNextStepDistance(distance);
+
+      if (distance > 35) {
+        break;
+      }
+
+      if (
+        step.maneuver.type === 'arrive'
+      ) {
+        setArrived(true);
+        break;
+      }
+
+      const nextIndex =
+        stepIndex + 1;
+
+      if (
+        nextIndex >= routeSteps.length
+      ) {
+        setArrived(true);
+        break;
+      }
+
+      stepIndex = nextIndex;
+      setCurrentStepIndex(stepIndex);
+    }
+
+    const destinationDistance =
+      haversineDistance(
+        currentLocation,
+        destinationPoint!,
+      );
+
+    if (destinationDistance <= 30) {
+      setArrived(true);
+    }
+  }, [
+    currentLocation,
+    currentStepIndex,
+    routeSteps,
+    paused,
+    arrived,
     destinationPoint,
   ]);
 
   /*
-   * Recalculate route manually.
+   * ------------------------------------------------------------
+   * OFF-ROUTE DETECTION
+   * ------------------------------------------------------------
+   *
+   * If GPS gets more than about 75m from the route,
+   * request a fresh route.
    */
-  const recalculate = () => {
-    if (!currentLocation || !destinationPoint) {
+
+  useEffect(() => {
+    if (
+      paused ||
+      arrived ||
+      !currentLocation ||
+      routeCoordinates.length < 2 ||
+      !destinationPoint
+    ) {
       return;
     }
 
-    setLoadingRoute(true);
+    const distanceFromRoute =
+      distanceToPolyline(
+        currentLocation,
+        routeCoordinates,
+      );
+
+    if (distanceFromRoute <= 75) {
+      return;
+    }
+
+    const now = Date.now();
+
+    if (
+      now - lastRerouteAtRef.current <
+      15000
+    ) {
+      return;
+    }
+
+    lastRerouteAtRef.current = now;
+    hasRouteRef.current = false;
+
+    fetchRoute(
+      currentLocation,
+      false,
+    );
+  }, [
+    currentLocation,
+    routeCoordinates,
+    paused,
+    arrived,
+    destinationPoint,
+    fetchRoute,
+  ]);
+
+  /*
+   * ------------------------------------------------------------
+   * MANUAL RECALCULATION
+   * ------------------------------------------------------------
+   */
+
+  const recalculate = () => {
+    const location =
+      latestLocationRef.current;
+
+    if (
+      !location ||
+      !destinationPoint
+    ) {
+      return;
+    }
+
+    hasRouteRef.current = false;
     setError('');
 
-    const url =
-      `https://router.project-osrm.org/route/v1/driving/` +
-      `${currentLocation.lng},${currentLocation.lat};` +
-      `${destinationPoint.lng},${destinationPoint.lat}` +
-      `?overview=full&geometries=geojson`;
-
-    fetch(url)
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(
-            `Routing failed: ${response.status}`,
-          );
-        }
-
-        return (await response.json()) as RouteResponse;
-      })
-      .then((data) => {
-        if (
-          data.code !== 'Ok' ||
-          !data.routes ||
-          data.routes.length === 0
-        ) {
-          throw new Error(
-            'No route available.',
-          );
-        }
-
-        const route = data.routes[0];
-
-        const coordinates =
-          route.geometry.coordinates.map(
-            ([lng, lat]) =>
-              [lat, lng] as [
-                number,
-                number,
-              ],
-          );
-
-        setRouteCoordinates(
-          coordinates,
-        );
-
-        setRouteDistance(
-          route.distance,
-        );
-
-        setRouteDuration(
-          route.duration,
-        );
-
-        setArrived(
-          route.distance < 30,
-        );
-      })
-      .catch((err) => {
-        console.error(
-          'Manual recalculation failed:',
-          err,
-        );
-
-        setError(
-          'Unable to recalculate the route.',
-        );
-      })
-      .finally(() => {
-        setLoadingRoute(false);
-      });
+    fetchRoute(
+      location,
+      true,
+    );
   };
+
+  /*
+   * ------------------------------------------------------------
+   * DESTINATION VALIDATION
+   * ------------------------------------------------------------
+   */
 
   if (!destination) {
     return null;
@@ -496,9 +1022,7 @@ export default function Navigation() {
           <div className="mt-5">
             <Button
               fullWidth
-              onClick={() =>
-                go('home')
-              }
+              onClick={() => go('home')}
             >
               Go Home
             </Button>
@@ -509,11 +1033,15 @@ export default function Navigation() {
   }
 
   /*
-   * Overall loading screen.
+   * ------------------------------------------------------------
+   * INITIAL LOADING SCREEN
+   * ------------------------------------------------------------
    */
+
   if (
     loadingLocation ||
-    loadingRoute
+    (loadingRoute &&
+      routeCoordinates.length === 0)
   ) {
     return (
       <div className="relative h-full w-full overflow-hidden bg-slate-100">
@@ -563,6 +1091,12 @@ export default function Navigation() {
     );
   }
 
+  /*
+   * ------------------------------------------------------------
+   * ERROR SCREEN
+   * ------------------------------------------------------------
+   */
+
   if (error) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-slate-100 px-6">
@@ -587,22 +1121,16 @@ export default function Navigation() {
           <div className="mt-5 space-y-2">
             <Button
               fullWidth
-              onClick={
-                recalculate
-              }
+              onClick={recalculate}
             >
-              <RefreshCw
-                size={18}
-              />
+              <RefreshCw size={18} />
               Try Again
             </Button>
 
             <Button
               fullWidth
               variant="secondary"
-              onClick={() =>
-                go('routes')
-              }
+              onClick={() => go('routes')}
             >
               Back to Routes
             </Button>
@@ -611,6 +1139,30 @@ export default function Navigation() {
       </div>
     );
   }
+
+  const currentStep =
+    currentStepIndex >= 0
+      ? routeSteps[currentStepIndex]
+      : null;
+
+  const instructionTitle =
+    arrived
+      ? 'You have arrived'
+      : currentStep
+        ? maneuverTitle(currentStep)
+        : 'Continue straight';
+
+  const instructionStreet =
+    arrived
+      ? destination.name
+      : currentStep
+        ? getStreetName(currentStep)
+        : destination.name;
+
+  const instructionDistance =
+    arrived
+      ? 0
+      : nextStepDistance;
 
   return (
     <div className="screen-enter relative h-full w-full overflow-hidden bg-slate-100">
@@ -626,7 +1178,7 @@ export default function Navigation() {
             currentLocation?.lng ??
               destinationPoint.lng,
           ]}
-          zoom={15}
+          zoom={17}
           zoomControl={false}
           className="h-full w-full"
         >
@@ -682,7 +1234,13 @@ export default function Navigation() {
             </>
           )}
 
-          <FollowRoute
+          <FollowCurrentLocation
+            currentLocation={
+              currentLocation
+            }
+          />
+
+          <FitRoute
             currentLocation={
               currentLocation
             }
@@ -694,15 +1252,14 @@ export default function Navigation() {
       </div>
 
       {/* ======================================================
-          DESTINATION CHIP
+          TOP DESTINATION CHIP
       ====================================================== */}
 
       <div className="absolute inset-x-0 top-0 z-20 px-4 pt-4">
         <div className="flex items-center gap-2 rounded-2xl bg-white/95 px-4 py-3 shadow-card backdrop-blur">
           <span className="text-lg">
             {destination.place
-              ? destination.place
-                  .emoji
+              ? destination.place.emoji
               : '📍'}
           </span>
 
@@ -717,9 +1274,8 @@ export default function Navigation() {
           </div>
 
           <button
-            onClick={() =>
-              go('home')
-            }
+            type="button"
+            onClick={() => go('home')}
             aria-label="Exit navigation"
             className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-500"
           >
@@ -757,6 +1313,65 @@ export default function Navigation() {
 
       <div className="absolute right-4 top-20 z-20">
         <SOSButton />
+      </div>
+
+      {/* ======================================================
+          NEXT TURN CARD
+      ====================================================== */}
+
+      <div className="absolute inset-x-4 top-36 z-20">
+        <div className="rounded-3xl bg-white p-4 shadow-sheet">
+          <div className="flex items-center gap-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-primary-600 text-4xl font-black text-white">
+              {arrived
+                ? '✓'
+                : currentStep
+                  ? maneuverSymbol(
+                      currentStep,
+                    )
+                  : '↑'}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold uppercase tracking-wide text-primary-600">
+                {arrived
+                  ? 'Destination'
+                  : 'Next instruction'}
+              </p>
+
+              <p className="mt-0.5 text-xl font-extrabold leading-tight text-slate-900">
+                {instructionTitle}
+              </p>
+
+              {!arrived && (
+                <p className="mt-1 truncate text-sm font-semibold text-slate-500">
+                  {instructionStreet}
+                </p>
+              )}
+            </div>
+
+            {!arrived && (
+              <div className="shrink-0 text-right">
+                <p className="text-2xl font-black text-slate-900">
+                  {formatDistance(
+                    instructionDistance,
+                  )}
+                </p>
+
+                <p className="text-[10px] font-bold uppercase text-slate-400">
+                  from turn
+                </p>
+              </div>
+            )}
+          </div>
+
+          {loadingRoute &&
+            routeCoordinates.length > 0 && (
+              <div className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-center text-xs font-semibold text-blue-700">
+                Recalculating route...
+              </div>
+            )}
+        </div>
       </div>
 
       {/* ======================================================
@@ -820,15 +1435,17 @@ export default function Navigation() {
 
           <div className="min-w-0 flex-1">
             <p className="text-lg font-extrabold text-slate-900">
-              {arrived
-                ? 'You have arrived'
-                : `Follow the route to ${destination.name}`}
+              {instructionTitle}
             </p>
 
             <p className="text-sm text-slate-500">
               {arrived
-                ? 'You are at or very close to your destination.'
-                : 'Your position is being updated using GPS.'}
+                ? `You are at or very close to ${destination.name}.`
+                : currentStep
+                  ? `${formatDistance(
+                      instructionDistance,
+                    )} until the next maneuver.`
+                  : 'Your position is being updated using GPS.'}
             </p>
           </div>
         </div>
@@ -855,13 +1472,9 @@ export default function Navigation() {
           <NavAction
             icon={
               paused ? (
-                <Play
-                  size={18}
-                />
+                <Play size={18} />
               ) : (
-                <Pause
-                  size={18}
-                />
+                <Pause size={18} />
               )
             }
             label={
@@ -876,9 +1489,7 @@ export default function Navigation() {
 
           <NavAction
             icon={
-              <RefreshCw
-                size={18}
-              />
+              <RefreshCw size={18} />
             }
             label="Recalc"
             onClick={
@@ -888,9 +1499,7 @@ export default function Navigation() {
 
           <NavAction
             icon={
-              <FileText
-                size={18}
-              />
+              <FileText size={18} />
             }
             label="Details"
             onClick={() =>
@@ -999,12 +1608,13 @@ function NavAction({
   label,
   onClick,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   label: string;
   onClick: () => void;
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className="flex flex-col items-center gap-1 rounded-2xl bg-slate-50 py-2.5 text-slate-700 active:scale-95"
     >
