@@ -14,80 +14,197 @@ import {
 
 import L from 'leaflet';
 
-import { useApp } from '@/store';
-
-import BottomSheet from '@/components/BottomSheet';
-import TopBar from '@/components/TopBar';
-import Button from '@/components/Button';
-
 import {
-  Check,
+  Accessibility,
   AlertTriangle,
-  Navigation,
-  LocateFixed,
+  CheckCircle2,
+  Clock3,
+  Footprints,
+  Loader2,
   MapPin,
+  Navigation,
+  Route as RouteIcon,
+  ShieldCheck,
+  Eye,
 } from 'lucide-react';
 
 import {
+  getAccessibilityRoutes,
   getPlaceAccessibility,
-  type AccessibilityPoint,
-} from '@/api';
+  type AccessibilityMode,
+  type BackendRoute,
+  type PlaceAccessibility,
+} from '../api';
+
+import { useApp } from '../store';
 
 import 'leaflet/dist/leaflet.css';
-
-
-// ============================================================
-// TYPES
-// ============================================================
 
 type RouteId =
   | 'accessible'
   | 'fastest'
   | 'clear';
 
-interface RouteFeature {
-  text: string;
-  ok: boolean;
-}
-
-interface RouteData {
-  id: RouteId;
+interface RouteMetadata {
   title: string;
   emoji: string;
-  color: string;
-  time: string;
-  dist: string;
   tag: string;
-  badge?: string;
-  features: RouteFeature[];
-  coordinates: [number, number][];
+  features: string[];
 }
 
 interface OsrmRoute {
   distance: number;
   duration: number;
-
   geometry: {
-    coordinates: [
-      number,
-      number,
-    ][];
+    coordinates: [number, number][];
   };
 }
 
 interface OsrmResponse {
-  code: string;
   routes?: OsrmRoute[];
 }
 
+interface RouteCard {
+  id: RouteId;
+  title: string;
+  emoji: string;
+  tag: string;
+  features: string[];
+  distanceKm: number;
+  durationMin: number;
+  coordinates: [number, number][];
+}
 
-// ============================================================
-// HELPERS
-// ============================================================
+const DEFAULT_ROUTE_METADATA: Record<
+  RouteId,
+  RouteMetadata
+> = {
+  accessible: {
+    title: 'Standard Route',
+    emoji: '🧭',
+    tag: 'Road route • accessibility not verified',
+    features: [
+      'Route calculated from the road network',
+      'Accessibility conditions are not verified',
+    ],
+  },
+
+  fastest: {
+    title: 'Fastest Route',
+    emoji: '⚡',
+    tag: 'Shortest estimated travel time',
+    features: [
+      'Route calculated from the road network',
+      'Accessibility conditions are not verified',
+    ],
+  },
+
+  clear: {
+    title: 'Alternative Route',
+    emoji: '🛣️',
+    tag: 'Alternative road route',
+    features: [
+      'Alternative route from the road network',
+      'Accessibility conditions are not verified',
+    ],
+  },
+};
+
+const destinationIcon =
+  L.divIcon({
+    className:
+      'accessnav-route-destination',
+    html: `
+      <div
+        style="
+          width:48px;
+          height:48px;
+          border-radius:50%;
+          background:#ef4444;
+          border:5px solid white;
+          box-shadow:0 4px 18px rgba(0,0,0,.35);
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          color:white;
+          font-size:24px;
+          font-weight:700;
+        "
+        aria-label="Destination"
+      >
+        📍
+      </div>
+    `,
+    iconSize: [48, 48],
+    iconAnchor: [24, 24],
+  });
+
+const currentLocationIcon =
+  L.divIcon({
+    className:
+      'accessnav-current-location',
+    html: `
+      <div
+        style="
+          width:24px;
+          height:24px;
+          border-radius:50%;
+          background:#2563eb;
+          border:4px solid white;
+          box-shadow:0 2px 10px rgba(0,0,0,.35);
+        "
+        aria-label="Current location"
+      ></div>
+    `,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+  });
+
+function MapController({
+  currentLocation,
+  destination,
+}: {
+  currentLocation: [number, number] | null;
+  destination: [number, number];
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!currentLocation) {
+      map.flyTo(
+        destination,
+        15,
+        {
+          duration: 0.8,
+        },
+      );
+
+      return;
+    }
+
+    const bounds =
+      L.latLngBounds([
+        currentLocation,
+        destination,
+      ]);
+
+    map.fitBounds(bounds, {
+      padding: [40, 40],
+      maxZoom: 15,
+      animate: true,
+    });
+  }, [
+    currentLocation,
+    destination,
+    map,
+  ]);
+
+  return null;
+}
 
 function formatDistance(
   meters: number,
-) {
+): string {
   if (meters < 1000) {
     return `${Math.round(meters)} m`;
   }
@@ -97,230 +214,268 @@ function formatDistance(
   ).toFixed(1)} km`;
 }
 
-
 function formatDuration(
   seconds: number,
-) {
-  const minutes =
-    Math.max(
-      1,
-      Math.round(
-        seconds / 60,
-      ),
-    );
+): string {
+  const minutes = Math.max(
+    1,
+    Math.round(seconds / 60),
+  );
 
   if (minutes < 60) {
     return `${minutes} min`;
   }
 
   const hours =
-    Math.floor(
-      minutes / 60,
-    );
+    Math.floor(minutes / 60);
 
-  const remainingMinutes =
+  const remaining =
     minutes % 60;
 
-  if (
-    remainingMinutes === 0
-  ) {
+  if (remaining === 0) {
     return `${hours} hr`;
   }
 
-  return `${hours} hr ${remainingMinutes} min`;
+  return `${hours} hr ${remaining} min`;
 }
 
-
-// ============================================================
-// DESTINATION ICON
-// ============================================================
-
-function createDestinationIcon() {
-  return L.divIcon({
-    className: '',
-
-    html: `
-      <div
-        style="
-          width: 42px;
-          height: 42px;
-          border-radius: 9999px;
-          background: #2563eb;
-          border: 4px solid white;
-          box-shadow: 0 4px 14px rgba(0,0,0,0.25);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-          font-size: 20px;
-          font-weight: 800;
-        "
-      >
-        <span>●</span>
-      </div>
-    `,
-
-    iconSize: [42, 42],
-    iconAnchor: [21, 21],
-  });
-}
-
-
-// ============================================================
-// CURRENT LOCATION ICON
-// ============================================================
-
-function createCurrentLocationIcon() {
-  return L.divIcon({
-    className: '',
-
-    html: `
-      <div
-        style="
-          width: 28px;
-          height: 28px;
-          border-radius: 9999px;
-          background: #0f766e;
-          border: 4px solid white;
-          box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        "
-      ></div>
-    `,
-
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-  });
-}
-
-
-// ============================================================
-// ACCESSIBILITY ICON
-// ============================================================
-
-function getAccessibilityIcon(
-  point: AccessibilityPoint,
-) {
-  switch (point.type) {
-    case 'ramp':
-      return '♿';
-
-    case 'elevator':
-      return '🛗';
-
-    case 'accessible_entrance':
-      return '🚪';
-
-    case 'accessible_crossing':
-      return '🚸';
-
-    case 'accessible_sidewalk':
-      return '🚶';
-
-    case 'accessible_shuttle':
-      return '🚌';
-
-    case 'accessible_restroom':
-      return '🚻';
-
-    case 'blocked_path':
-      return '⛔';
-
-    case 'warning':
-      return '⚠️';
-
-    default:
-      return '♿';
+function getBackendRoute(
+  routes: BackendRoute[] | null,
+  id: RouteId,
+): BackendRoute | null {
+  if (!routes) {
+    return null;
   }
+
+  return (
+    routes.find(
+      (route) =>
+        route.id === id ||
+        route.name
+          ?.toLowerCase()
+          .includes(id),
+    ) ?? null
+  );
 }
 
-
-// ============================================================
-// FIT ROUTE
-// ============================================================
-
-function FitRoute({
-  currentLocation,
-  destination,
-  coordinates,
-}: {
-  currentLocation:
-    | [number, number]
-    | null;
-
-  destination:
-    [number, number];
-
-  coordinates:
-    [number, number][];
-}) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (
-      coordinates.length < 2
-    ) {
-      if (currentLocation) {
-        map.setView(
-          currentLocation,
-          14,
-        );
-      } else {
-        map.setView(
-          destination,
-          14,
-        );
-      }
-
-      return;
-    }
-
-    const bounds =
-      L.latLngBounds(
-        coordinates.map(
-          ([lat, lng]) => [
-            lat,
-            lng,
-          ],
-        ),
-      );
-
-    map.fitBounds(
-      bounds,
-      {
-        padding: [
-          40,
-          220,
-        ],
-        maxZoom: 17,
-      },
+function getRouteMetadata(
+  routes: BackendRoute[] | null,
+  id: RouteId,
+  hasAccessibilityData: boolean,
+): RouteMetadata {
+  const backendRoute =
+    getBackendRoute(
+      routes,
+      id,
     );
-  }, [
-    map,
-    currentLocation,
-    destination,
-    coordinates,
-  ]);
 
-  return null;
+  if (backendRoute) {
+    return {
+      title:
+        backendRoute.name ||
+        DEFAULT_ROUTE_METADATA[id]
+          .title,
+
+      emoji:
+        DEFAULT_ROUTE_METADATA[id]
+          .emoji,
+
+      tag:
+        hasAccessibilityData
+          ? 'Accessibility data available'
+          : DEFAULT_ROUTE_METADATA[id]
+              .tag,
+
+      features:
+        backendRoute.features &&
+        backendRoute.features.length > 0
+          ? backendRoute.features
+          : DEFAULT_ROUTE_METADATA[id]
+              .features,
+    };
+  }
+
+  if (
+    hasAccessibilityData &&
+    id === 'accessible'
+  ) {
+    return {
+      title:
+        'Accessibility Route',
+      emoji: '♿',
+      tag:
+        'Accessibility data available',
+      features: [
+        'Accessibility information available',
+        'Route geometry from road routing',
+      ],
+    };
+  }
+
+  return DEFAULT_ROUTE_METADATA[id];
 }
 
+function getAccessibilityFeatureList(
+  accessibility: PlaceAccessibility | null,
+): string[] {
+  if (!accessibility) {
+    return [];
+  }
 
-// ============================================================
-// MAIN ROUTES SCREEN
-// ============================================================
+  const features: string[] = [];
+
+  const data =
+    accessibility as unknown as Record<
+      string,
+      unknown
+    >;
+
+  const possibleFeatures = [
+    'features',
+    'accessibility',
+    'accessibility_features',
+    'tags',
+  ];
+
+  for (const key of possibleFeatures) {
+    const value = data[key];
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (
+          typeof item === 'string' &&
+          item.trim()
+        ) {
+          features.push(item);
+        }
+      }
+    }
+  }
+
+  return Array.from(
+    new Set(features),
+  );
+}
+
+function RouteMap({
+  currentLocation,
+  destinationPoint,
+  selectedRoute,
+  routeCoordinates,
+}: {
+  currentLocation: [number, number] | null;
+  destinationPoint: [number, number];
+  selectedRoute: RouteId;
+  routeCoordinates: [number, number][];
+}) {
+  const center =
+    currentLocation ??
+    destinationPoint;
+
+  return (
+    <div className="relative h-[400px] w-full overflow-hidden bg-slate-200">
+      <MapContainer
+        center={center}
+        zoom={14}
+        scrollWheelZoom
+        className="h-full w-full"
+      >
+        <TileLayer
+          attribution="&copy; OpenStreetMap contributors"
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+
+        <MapController
+          currentLocation={
+            currentLocation
+          }
+          destination={
+            destinationPoint
+          }
+        />
+
+        {currentLocation && (
+          <Marker
+            position={
+              currentLocation
+            }
+            icon={
+              currentLocationIcon
+            }
+          />
+        )}
+
+        <Marker
+          position={
+            destinationPoint
+          }
+          icon={
+            destinationIcon
+          }
+        />
+
+        {routeCoordinates.length >
+          1 && (
+          <Polyline
+            positions={
+              routeCoordinates
+            }
+            pathOptions={{
+              color:
+                selectedRoute ===
+                'accessible'
+                  ? '#2563eb'
+                  : selectedRoute ===
+                      'fastest'
+                    ? '#7c3aed'
+                    : '#f59e0b',
+
+              weight: 7,
+
+              opacity: 0.9,
+
+              lineCap: 'round',
+
+              lineJoin: 'round',
+
+              dashArray:
+                selectedRoute ===
+                'clear'
+                  ? '12 8'
+                  : undefined,
+            }}
+          />
+        )}
+      </MapContainer>
+
+      <div className="absolute left-3 top-3 z-[500] flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-lg">
+        <RouteIcon
+          size={17}
+          className="text-primary-600"
+        />
+
+        {routeCoordinates.length >
+        1
+          ? 'Route calculated'
+          : 'Calculating route...'}
+      </div>
+
+      <div className="absolute bottom-2 right-2 z-[500] rounded bg-white/90 px-2 py-1 text-[10px] text-slate-500 shadow">
+        Leaflet | © OpenStreetMap
+        contributors
+      </div>
+    </div>
+  );
+}
 
 export default function Routes() {
   const {
     destination,
+    mode,
     selectedRoute,
     setSelectedRoute,
     go,
-    mode,
   } = useApp();
-
-  // ----------------------------------------------------------
-  // Location
-  // ----------------------------------------------------------
 
   const [
     currentLocation,
@@ -329,268 +484,292 @@ export default function Routes() {
     [number, number] | null
   >(null);
 
-  // ----------------------------------------------------------
-  // Routes
-  // ----------------------------------------------------------
-
   const [
-    routes,
-    setRoutes,
-  ] = useState<RouteData[]>(
-    [],
-  );
-
-  // ----------------------------------------------------------
-  // Accessibility
-  // ----------------------------------------------------------
-
-  const [
-    accessibilityPoints,
-    setAccessibilityPoints,
-  ] = useState<
-    AccessibilityPoint[]
-  >([]);
-
-  const [
-    accessibilityAvailable,
-    setAccessibilityAvailable,
-  ] = useState(false);
-
-  const [
-    loadingAccessibility,
-    setLoadingAccessibility,
-  ] = useState(false);
-
-  // ----------------------------------------------------------
-  // Loading
-  // ----------------------------------------------------------
-
-  const [
-    loadingLocation,
-    setLoadingLocation,
+    locationLoading,
+    setLocationLoading,
   ] = useState(true);
 
   const [
-    loadingRoute,
-    setLoadingRoute,
-  ] = useState(false);
-
-  // ----------------------------------------------------------
-  // Error
-  // ----------------------------------------------------------
-
-  const [
-    error,
-    setError,
+    locationError,
+    setLocationError,
   ] = useState('');
 
-  // ----------------------------------------------------------
-  // Destination
-  // ----------------------------------------------------------
+  const [
+    backendRoutes,
+    setBackendRoutes,
+  ] = useState<
+    BackendRoute[] | null
+  >(null);
 
-  const destinationPoint =
-    useMemo<
-      [number, number] | null
-    >(() => {
-      if (!destination) {
-        return null;
-      }
+  const [
+    placeAccessibility,
+    setPlaceAccessibility,
+  ] =
+    useState<PlaceAccessibility | null>(
+      null,
+    );
 
-      return [
-        destination.lat,
-        destination.lng,
-      ];
-    }, [destination]);
+  const [
+    accessibilityLoading,
+    setAccessibilityLoading,
+  ] = useState(false);
 
-  // ==========================================================
-  // GET CURRENT LOCATION
-  // ==========================================================
+  const [
+    accessibilityError,
+    setAccessibilityError,
+  ] = useState('');
+
+  const [
+    osrmRoutes,
+    setOsrmRoutes,
+  ] = useState<OsrmRoute[]>([]);
+
+  const [
+    routeLoading,
+    setRouteLoading,
+  ] = useState(false);
+
+  const [
+    routeError,
+    setRouteError,
+  ] = useState('');
+
+  if (!destination) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-slate-100 px-6">
+        <div className="w-full rounded-3xl bg-white p-6 text-center shadow-card">
+          <MapPin
+            size={36}
+            className="mx-auto text-primary-600"
+          />
+
+          <h2 className="mt-4 text-xl font-extrabold text-slate-900">
+            No destination selected
+          </h2>
+
+          <p className="mt-2 text-sm text-slate-500">
+            Please select a destination
+            before choosing a route.
+          </p>
+
+          <button
+            type="button"
+            onClick={() =>
+              go('search')
+            }
+            className="mt-5 w-full rounded-2xl bg-primary-600 px-5 py-3.5 font-bold text-white"
+          >
+            Search for a destination
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const destinationPoint:
+    | [number, number]
+    | null =
+    Number.isFinite(destination.lat) &&
+    Number.isFinite(destination.lng)
+      ? [
+          destination.lat,
+          destination.lng,
+        ]
+      : null;
+
+  const destinationPlaceId =
+    destination.place?.id ??
+    null;
+
+  const hasAccessibilityData =
+    destinationPlaceId !== null &&
+    placeAccessibility !== null;
+
+  /*
+   * -------------------------------------------------------
+   * CURRENT LOCATION
+   * -------------------------------------------------------
+   */
 
   useEffect(() => {
-    if (
-      !navigator.geolocation
-    ) {
-      setLoadingLocation(false);
+    let cancelled = false;
 
-      setError(
-        'Your browser does not support location services.',
+    if (!navigator.geolocation) {
+      setLocationLoading(false);
+
+      setLocationError(
+        'Location services are not available in this browser.',
       );
 
       return;
     }
 
-    setLoadingLocation(true);
-    setError('');
-
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        if (cancelled) {
+          return;
+        }
+
         setCurrentLocation([
           position.coords.latitude,
           position.coords.longitude,
         ]);
 
-        setLoadingLocation(false);
+        setLocationLoading(false);
+        setLocationError('');
       },
+      (error) => {
+        if (cancelled) {
+          return;
+        }
 
-      (locationError) => {
         console.error(
-          'Location error:',
-          locationError,
+          'Unable to get current location:',
+          error,
         );
 
-        setLoadingLocation(false);
+        setLocationLoading(false);
 
-        switch (
-          locationError.code
-        ) {
-          case locationError.PERMISSION_DENIED:
-            setError(
-              'Location permission was denied. Please allow location access in your browser.',
-            );
-            break;
-
-          case locationError.POSITION_UNAVAILABLE:
-            setError(
-              'Your current location could not be determined.',
-            );
-            break;
-
-          case locationError.TIMEOUT:
-            setError(
-              'Getting your current location timed out.',
-            );
-            break;
-
-          default:
-            setError(
-              'Unable to get your current location.',
-            );
-        }
+        setLocationError(
+          'Your current location could not be detected. You can still view the destination route.',
+        );
       },
-
       {
         enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 10000,
+        timeout: 10000,
+        maximumAge: 30000,
       },
     );
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-
-  // ==========================================================
-  // LOAD ACCESSIBILITY DATA
-  // ==========================================================
+  /*
+   * -------------------------------------------------------
+   * ACCESSIBILITY DATA
+   *
+   * Only known AccessMob places have accessibility
+   * information. Arbitrary map-search destinations
+   * intentionally skip these calls.
+   * -------------------------------------------------------
+   */
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadAccessibility() {
-      /*
-       * Arbitrary searched destinations do not necessarily
-       * exist in our MongoDB accessibility database.
-       *
-       * In that situation we keep the normal OSRM route,
-       * but clearly indicate that accessibility data is
-       * unavailable.
-       */
-
-      if (
-        !destination?.place?.id
-      ) {
-        setAccessibilityPoints([]);
-        setAccessibilityAvailable(false);
-        setLoadingAccessibility(false);
-
+    async function loadAccessibilityData() {
+      if (!destinationPlaceId) {
+        setBackendRoutes(null);
+        setPlaceAccessibility(null);
+        setAccessibilityError('');
+        setAccessibilityLoading(false);
         return;
       }
 
       try {
-        setLoadingAccessibility(
-          true,
-        );
+        setAccessibilityLoading(true);
+        setAccessibilityError('');
 
-        const data =
-          await getPlaceAccessibility(
-            destination.place.id,
-          );
+        const [
+          accessibility,
+          routes,
+        ] = await Promise.all([
+          getPlaceAccessibility(
+            destinationPlaceId,
+          ),
+          getAccessibilityRoutes(
+            destinationPlaceId,
+            mode as AccessibilityMode,
+          ),
+        ]);
 
         if (cancelled) {
           return;
         }
 
-        const points =
-          mode === 'wheelchair'
-            ? data.wheelchair.points
-            : data.lowvision.points;
-
-        setAccessibilityPoints(
-          points,
+        setPlaceAccessibility(
+          accessibility,
         );
 
-        setAccessibilityAvailable(
-          data.dataAvailable,
+        setBackendRoutes(
+          routes,
         );
-      } catch (err) {
-        console.error(
-          'Accessibility data error:',
-          err,
-        );
-
-        if (!cancelled) {
-          setAccessibilityPoints(
-            [],
-          );
-
-          setAccessibilityAvailable(
-            false,
-          );
+      } catch (error) {
+        if (cancelled) {
+          return;
         }
+
+        console.error(
+          'Failed to load accessibility data:',
+          error,
+        );
+
+        setAccessibilityError(
+          'Accessibility information could not be loaded. Standard road routing is still available.',
+        );
+
+        setBackendRoutes(null);
+        setPlaceAccessibility(null);
       } finally {
         if (!cancelled) {
-          setLoadingAccessibility(
+          setAccessibilityLoading(
             false,
           );
         }
       }
     }
 
-    loadAccessibility();
+    loadAccessibilityData();
 
     return () => {
       cancelled = true;
     };
   }, [
-    destination?.place?.id,
+    destinationPlaceId,
     mode,
   ]);
 
-
-  // ==========================================================
-  // CALCULATE REAL ROUTE
-  // ==========================================================
+  /*
+   * -------------------------------------------------------
+   * STANDARD ROAD ROUTING
+   *
+   * This is intentionally independent of accessibility
+   * data so ANY destination can be routed.
+   * -------------------------------------------------------
+   */
 
   useEffect(() => {
-    if (
-      !currentLocation ||
-      !destinationPoint
-    ) {
-      return;
-    }
+    let cancelled = false;
 
     async function calculateRoute() {
+      if (!currentLocation) {
+        return;
+      }
+
+      if (!destinationPoint) {
+        setRouteError(
+          'This destination does not have valid coordinates.',
+        );
+
+        return;
+      }
+
       try {
-        setLoadingRoute(true);
-        setError('');
+        setRouteLoading(true);
+        setRouteError('');
+        setOsrmRoutes([]);
 
         const [
           currentLat,
           currentLng,
-        ] = currentLocation!;
+        ] = currentLocation;
 
         const [
           destinationLat,
           destinationLng,
-        ] = destinationPoint!;
+        ] = destinationPoint;
 
         const url =
           `https://router.project-osrm.org/route/v1/driving/` +
@@ -611,1124 +790,787 @@ export default function Routes() {
           (await response.json()) as OsrmResponse;
 
         if (
-          data.code !== 'Ok' ||
-          !data.routes ||
+          !Array.isArray(
+            data.routes,
+          ) ||
           data.routes.length === 0
         ) {
           throw new Error(
-            'No route was returned by the routing service.',
+            'No road route was found.',
           );
         }
 
-        const firstRoute =
-          data.routes[0];
-
-        const coordinates =
-          firstRoute.geometry.coordinates.map(
-            ([lng, lat]) =>
-              [
-                lat,
-                lng,
-              ] as [
-                number,
-                number,
-              ],
-          );
-
-        const calculatedRoutes:
-          RouteData[] = [];
-
-
-        // ======================================================
-        // ACCESSIBILITY INFORMATION
-        // ======================================================
-
-        const ramps =
-          accessibilityPoints.filter(
-            (point) =>
-              point.type ===
-              'ramp',
-          );
-
-        const elevators =
-          accessibilityPoints.filter(
-            (point) =>
-              point.type ===
-              'elevator',
-          );
-
-        const entrances =
-          accessibilityPoints.filter(
-            (point) =>
-              point.type ===
-              'accessible_entrance',
-          );
-
-        const crossings =
-          accessibilityPoints.filter(
-            (point) =>
-              point.type ===
-              'accessible_crossing',
-          );
-
-        const sidewalks =
-          accessibilityPoints.filter(
-            (point) =>
-              point.type ===
-              'accessible_sidewalk',
-          );
-
-        const warnings =
-          accessibilityPoints.filter(
-            (point) =>
-              point.type ===
-                'warning' ||
-              point.type ===
-                'blocked_path',
-          );
-
-
-        // ======================================================
-        // ACCESSIBLE / CLEAR ROUTE
-        // ======================================================
-
-        const accessibilityFeatures:
-          RouteFeature[] = [];
-
-        if (
-          mode === 'wheelchair'
-        ) {
-          accessibilityFeatures.push(
-            {
-              text:
-                ramps.length > 0
-                  ? 'Ramp available'
-                  : 'Ramp data unavailable',
-              ok:
-                ramps.length > 0,
-            },
-          );
-
-          accessibilityFeatures.push(
-            {
-              text:
-                elevators.length > 0
-                  ? 'Elevator available'
-                  : 'No elevator data',
-              ok:
-                elevators.length > 0,
-            },
-          );
-
-          accessibilityFeatures.push(
-            {
-              text:
-                entrances.length > 0
-                  ? 'Step-free entrance'
-                  : 'Entrance data unavailable',
-              ok:
-                entrances.length > 0,
-            },
-          );
-        } else {
-          accessibilityFeatures.push(
-            {
-              text:
-                crossings.length > 0
-                  ? 'Accessible crossings'
-                  : 'Crossing data unavailable',
-              ok:
-                crossings.length > 0,
-            },
-          );
-
-          accessibilityFeatures.push(
-            {
-              text:
-                sidewalks.length > 0
-                  ? 'Clear sidewalk information'
-                  : 'Sidewalk data unavailable',
-              ok:
-                sidewalks.length > 0,
-            },
-          );
+        if (cancelled) {
+          return;
         }
 
-
-        // ======================================================
-        // WARNINGS
-        // ======================================================
-
-        if (
-          warnings.length > 0
-        ) {
-          accessibilityFeatures.push(
-            {
-              text:
-                `${warnings.length} accessibility warning${
-                  warnings.length === 1
-                    ? ''
-                    : 's'
-                }`,
-              ok: false,
-            },
-          );
-        }
-
-
-        // ======================================================
-        // ACCESSIBLE ROUTE
-        // ======================================================
-
-        calculatedRoutes.push({
-          id: 'accessible',
-
-          title:
-            mode === 'wheelchair'
-              ? 'ACCESSIBLE'
-              : 'CLEAR',
-
-          emoji:
-            mode === 'wheelchair'
-              ? '♿'
-              : '👁️',
-
-          color: '#16a34a',
-
-          time:
-            formatDuration(
-              firstRoute.duration,
-            ),
-
-          dist:
-            formatDistance(
-              firstRoute.distance,
-            ),
-
-          tag:
-            accessibilityAvailable
-              ? mode === 'wheelchair'
-                ? 'Accessibility information available'
-                : 'Low-vision information available'
-              : 'Standard road route',
-
-          badge:
-            accessibilityAvailable
-              ? mode === 'wheelchair'
-                ? 'Accessibility data loaded'
-                : 'Low-vision data loaded'
-              : 'Accessibility data unavailable',
-
-          features: [
-            {
-              text: 'Real route',
-              ok: true,
-            },
-
-            ...accessibilityFeatures,
-          ],
-
-          coordinates,
-        });
-
-
-        // ======================================================
-        // FASTEST ROUTE
-        // ======================================================
-
-        calculatedRoutes.push({
-          id: 'fastest',
-
-          title: 'FASTEST',
-
-          emoji: '⚡',
-
-          color: '#2563eb',
-
-          time:
-            formatDuration(
-              firstRoute.duration,
-            ),
-
-          dist:
-            formatDistance(
-              firstRoute.distance,
-            ),
-
-          tag:
-            'Fastest road route returned by OSRM',
-
-          features: [
-            {
-              text: 'Real route',
-              ok: true,
-            },
-
-            {
-              text: 'Road routing',
-              ok: true,
-            },
-
-            ...(mode === 'wheelchair'
-              ? [
-                  {
-                    text:
-                      'Accessibility not guaranteed',
-                    ok: false,
-                  },
-                ]
-              : [
-                  {
-                    text:
-                      'Low-vision accessibility not guaranteed',
-                    ok: false,
-                  },
-                ]),
-          ],
-
-          coordinates,
-        });
-
-
-        // ======================================================
-        // CLEAR / ALTERNATIVE ROUTE
-        // ======================================================
-
-        const alternativeRoute =
-          data.routes[1];
-
-        if (
-          alternativeRoute
-        ) {
-          const alternativeCoordinates =
-            alternativeRoute.geometry.coordinates.map(
-              ([lng, lat]) =>
-                [
-                  lat,
-                  lng,
-                ] as [
-                  number,
-                  number,
-                ],
-            );
-
-          calculatedRoutes.push({
-            id: 'clear',
-
-            title: 'CLEAR',
-
-            emoji: '🟡',
-
-            color: '#f59e0b',
-
-            time:
-              formatDuration(
-                alternativeRoute.duration,
-              ),
-
-            dist:
-              formatDistance(
-                alternativeRoute.distance,
-              ),
-
-            tag:
-              'Alternative road route',
-
-            features: [
-              {
-                text:
-                  'Real alternative',
-                ok: true,
-              },
-
-              {
-                text:
-                  accessibilityAvailable
-                    ? 'Accessibility data loaded'
-                    : 'Accessibility data unavailable',
-                ok:
-                  accessibilityAvailable,
-              },
-
-              ...(warnings.length > 0
-                ? [
-                    {
-                      text:
-                        'Accessibility warnings nearby',
-                      ok: false,
-                    },
-                  ]
-                : []),
-            ],
-
-            coordinates:
-              alternativeCoordinates,
-          });
-        } else {
-          calculatedRoutes.push({
-            id: 'clear',
-
-            title: 'CLEAR',
-
-            emoji: '🟡',
-
-            color: '#f59e0b',
-
-            time:
-              formatDuration(
-                firstRoute.duration,
-              ),
-
-            dist:
-              formatDistance(
-                firstRoute.distance,
-              ),
-
-            tag:
-              'Alternative route unavailable',
-
-            features: [
-              {
-                text: 'Real route',
-                ok: true,
-              },
-
-              {
-                text:
-                  'Alternative unavailable',
-                ok: false,
-              },
-            ],
-
-            coordinates,
-          });
-        }
-
-
-        // ======================================================
-        // SAVE ROUTES
-        // ======================================================
-
-        setRoutes(
-          calculatedRoutes,
+        setOsrmRoutes(
+          data.routes.slice(0, 3),
         );
-
-
-        // ======================================================
-        // KEEP CURRENT SELECTION
-        // ======================================================
-
-        const selectedStillExists =
-          calculatedRoutes.some(
-            (route) =>
-              route.id ===
-              selectedRoute,
-          );
-
-        if (
-          !selectedStillExists
-        ) {
-          setSelectedRoute(
-            'accessible',
-          );
+      } catch (error) {
+        if (cancelled) {
+          return;
         }
-      } catch (err) {
+
         console.error(
-          'Failed to calculate route:',
-          err,
+          'OSRM routing failed:',
+          error,
         );
 
-        setRoutes([]);
-
-        setError(
-          'Unable to calculate a route to this destination.',
+        setRouteError(
+          'Unable to calculate a road route right now.',
         );
       } finally {
-        setLoadingRoute(
-          false,
-        );
+        if (!cancelled) {
+          setRouteLoading(false);
+        }
       }
     }
 
     calculateRoute();
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     currentLocation,
-    destinationPoint,
-    mode,
-    accessibilityPoints,
-    accessibilityAvailable,
+    destinationPoint?.[0],
+    destinationPoint?.[1],
   ]);
 
+  /*
+   * -------------------------------------------------------
+   * BUILD ROUTE CARDS
+   * -------------------------------------------------------
+   */
 
-  // ==========================================================
-  // NO DESTINATION
-  // ==========================================================
+  const routeCards =
+    useMemo<RouteCard[]>(() => {
+      const cards: RouteCard[] =
+        [];
 
-  if (
-    !destination ||
-    !destinationPoint
-  ) {
-    return null;
-  }
+      const firstRoute =
+        osrmRoutes[0] ?? null;
 
+      const secondRoute =
+        osrmRoutes[1] ?? null;
 
-  // ==========================================================
-  // SELECTED ROUTE
-  // ==========================================================
+      if (firstRoute) {
+        const metadata =
+          getRouteMetadata(
+            backendRoutes,
+            'accessible',
+            hasAccessibilityData,
+          );
 
-  const selectedRouteData =
-    routes.find(
+        cards.push({
+          id: 'accessible',
+          title: metadata.title,
+          emoji: metadata.emoji,
+          tag: metadata.tag,
+          features: metadata.features,
+          distanceKm:
+            firstRoute.distance / 1000,
+          durationMin:
+            firstRoute.duration / 60,
+          coordinates:
+            firstRoute.geometry.coordinates.map(
+              ([lng, lat]) => [
+                lat,
+                lng,
+              ],
+            ),
+        });
+      }
+
+      if (firstRoute) {
+        const metadata =
+          getRouteMetadata(
+            backendRoutes,
+            'fastest',
+            hasAccessibilityData,
+          );
+
+        cards.push({
+          id: 'fastest',
+          title: metadata.title,
+          emoji: metadata.emoji,
+          tag: metadata.tag,
+          features: metadata.features,
+          distanceKm:
+            firstRoute.distance / 1000,
+          durationMin:
+            firstRoute.duration / 60,
+          coordinates:
+            firstRoute.geometry.coordinates.map(
+              ([lng, lat]) => [
+                lat,
+                lng,
+              ],
+            ),
+        });
+      }
+
+      if (secondRoute) {
+        const metadata =
+          getRouteMetadata(
+            backendRoutes,
+            'clear',
+            hasAccessibilityData,
+          );
+
+        cards.push({
+          id: 'clear',
+          title: metadata.title,
+          emoji: metadata.emoji,
+          tag: metadata.tag,
+          features: metadata.features,
+          distanceKm:
+            secondRoute.distance / 1000,
+          durationMin:
+            secondRoute.duration / 60,
+          coordinates:
+            secondRoute.geometry.coordinates.map(
+              ([lng, lat]) => [
+                lat,
+                lng,
+              ],
+            ),
+        });
+      }
+
+      return cards;
+    }, [
+      osrmRoutes,
+      backendRoutes,
+      hasAccessibilityData,
+    ]);
+
+  /*
+   * -------------------------------------------------------
+   * KEEP SELECTED ROUTE VALID
+   * -------------------------------------------------------
+   */
+
+  useEffect(() => {
+    if (
+      routeCards.length === 0
+    ) {
+      return;
+    }
+
+    const exists =
+      routeCards.some(
+        (route) =>
+          route.id === selectedRoute,
+      );
+
+    if (!exists) {
+      setSelectedRoute(
+        routeCards[0].id,
+      );
+    }
+  }, [
+    routeCards,
+    selectedRoute,
+    setSelectedRoute,
+  ]);
+
+  const selectedRouteCard =
+    routeCards.find(
       (route) =>
-        route.id ===
-        selectedRoute,
+        route.id === selectedRoute,
     ) ??
-    routes[0];
+    routeCards[0] ??
+    null;
 
-  const routeCoordinates =
-    selectedRouteData?.coordinates ??
-    [];
+  const accessibilityFeatures =
+    useMemo(
+      () =>
+        getAccessibilityFeatureList(
+          placeAccessibility,
+        ),
+      [placeAccessibility],
+    );
 
+  const visibleAccessibilityFeatures =
+    accessibilityFeatures.slice(
+      0,
+      6,
+    );
 
-  // ==========================================================
-  // RENDER
-  // ==========================================================
+  const selectedCoordinates =
+    selectedRouteCard
+      ?.coordinates ?? [];
+
+  /*
+   * -------------------------------------------------------
+   * UI
+   * -------------------------------------------------------
+   */
 
   return (
-    <div className="screen-enter relative h-full w-full overflow-hidden bg-slate-100">
+    <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-slate-50">
+      {/* =====================================================
+          HEADER
+      ===================================================== */}
 
-      {/* ================================================== */}
-      {/* MAP */}
-      {/* ================================================== */}
-
-      <div className="absolute inset-0">
-        <MapContainer
-          center={
-            destinationPoint
-          }
-          zoom={14}
-          zoomControl={false}
-          className="h-full w-full"
-        >
-          <TileLayer
-            attribution="&copy; OpenStreetMap contributors"
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-
-          {/* CURRENT LOCATION */}
-
-          {currentLocation && (
-            <Marker
-              position={
-                currentLocation
-              }
-              icon={createCurrentLocationIcon()}
-            />
-          )}
-
-          {/* DESTINATION */}
-
-          <Marker
-            position={
-              destinationPoint
-            }
-            icon={createDestinationIcon()}
-          />
-
-          {/* ACCESSIBILITY POINTS */}
-
-          {accessibilityPoints.map(
-            (point) => (
-              <Marker
-                key={point.id}
-                position={[
-                  point.latitude,
-                  point.longitude,
-                ]}
-                icon={L.divIcon({
-                  className: '',
-                  html: `
-                    <div
-                      style="
-                        width: 30px;
-                        height: 30px;
-                        border-radius: 9999px;
-                        background: white;
-                        border: 2px solid #16a34a;
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        font-size: 15px;
-                      "
-                    >
-                      ${getAccessibilityIcon(point)}
-                    </div>
-                  `,
-                  iconSize: [
-                    30,
-                    30,
-                  ],
-                  iconAnchor: [
-                    15,
-                    15,
-                  ],
-                })}
+      <div className="shrink-0 bg-white px-5 pb-4 pt-5 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-100">
+            {mode ===
+            'wheelchair' ? (
+              <Accessibility
+                size={25}
+                className="text-primary-700"
               />
-            ),
-          )}
-
-          {/* ROUTE */}
-
-          {routeCoordinates.length >
-            1 && (
-            <>
-              <Polyline
-                positions={
-                  routeCoordinates
-                }
-                pathOptions={{
-                  color:
-                    '#ffffff',
-                  weight: 9,
-                  opacity: 0.9,
-                }}
+            ) : (
+              <Eye
+                size={25}
+                className="text-primary-700"
               />
+            )}
+          </div>
 
-              <Polyline
-                positions={
-                  routeCoordinates
-                }
-                pathOptions={{
-                  color:
-                    selectedRoute ===
-                    'accessible'
-                      ? '#16a34a'
-                      : selectedRoute ===
-                          'fastest'
-                        ? '#2563eb'
-                        : '#f59e0b',
+          <div className="min-w-0">
+            <h1 className="text-xl font-extrabold text-slate-900">
+              Choose a Route
+            </h1>
 
-                  weight: 6,
+            <p className="truncate text-base text-slate-500">
+              {destination.name}
+            </p>
+          </div>
+        </div>
+      </div>
 
-                  opacity: 0.95,
-                }}
-              />
-            </>
-          )}
+      {/* =====================================================
+          SCROLLABLE CONTENT
+      ===================================================== */}
 
-          <FitRoute
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* ---------------------------------------------------
+            MAP
+        --------------------------------------------------- */}
+
+        {destinationPoint ? (
+          <RouteMap
             currentLocation={
               currentLocation
             }
-            destination={
+            destinationPoint={
               destinationPoint
             }
-            coordinates={
-              routeCoordinates
+            selectedRoute={
+              selectedRoute
+            }
+            routeCoordinates={
+              selectedCoordinates
             }
           />
-        </MapContainer>
-      </div>
+        ) : (
+          <div className="flex h-[400px] items-center justify-center bg-slate-200 px-6 text-center">
+            <div>
+              <AlertTriangle
+                size={34}
+                className="mx-auto text-amber-500"
+              />
 
-
-      {/* ================================================== */}
-      {/* TOP BAR */}
-      {/* ================================================== */}
-
-      <TopBar
-        onBack={() =>
-          go('destination')
-        }
-        transparent
-      />
-
-
-      {/* ================================================== */}
-      {/* LOCATION STATUS */}
-      {/* ================================================== */}
-
-      <div className="absolute left-4 top-16 z-10 rounded-2xl bg-white/95 px-3 py-2 shadow-card backdrop-blur">
-        <div className="flex items-center gap-2">
-
-          <LocateFixed
-            size={16}
-            className={
-              currentLocation
-                ? 'text-accessible-600'
-                : 'text-slate-400'
-            }
-          />
-
-          <div>
-            <p className="text-xs font-bold text-slate-800">
-              {loadingLocation
-                ? 'Finding you...'
-                : currentLocation
-                  ? 'Current location'
-                  : 'Location unavailable'}
-            </p>
-
-            {currentLocation && (
-              <p className="text-[10px] text-slate-500">
-                GPS location active
+              <p className="mt-3 font-bold text-slate-800">
+                Destination coordinates
+                unavailable
               </p>
-            )}
-          </div>
-        </div>
-      </div>
 
-
-      {/* ================================================== */}
-      {/* ACCESSIBILITY STATUS */}
-      {/* ================================================== */}
-
-      <div className="absolute left-4 top-28 z-10 rounded-2xl bg-white/95 px-3 py-2 shadow-card backdrop-blur">
-
-        <div className="flex items-center gap-2">
-
-          <span className="text-lg">
-            {mode === 'wheelchair'
-              ? '♿'
-              : '👁️'}
-          </span>
-
-          <div>
-            <p className="text-xs font-bold text-slate-800">
-              {mode === 'wheelchair'
-                ? 'Wheelchair mode'
-                : 'Low-vision mode'}
-            </p>
-
-            <p className="text-[10px] text-slate-500">
-              {loadingAccessibility
-                ? 'Loading accessibility data...'
-                : accessibilityAvailable
-                  ? `${accessibilityPoints.length} accessibility points`
-                  : 'No accessibility data'}
-            </p>
-          </div>
-        </div>
-      </div>
-
-
-      {/* ================================================== */}
-      {/* ROUTE LEGEND */}
-      {/* ================================================== */}
-
-      {routes.length > 0 && (
-        <div className="absolute right-4 top-16 z-10 space-y-1.5 rounded-2xl bg-white/95 p-3 shadow-card backdrop-blur">
-
-          {routes.map(
-            (route) => (
-              <div
-                key={route.id}
-                className="flex items-center gap-2 text-xs font-semibold"
-              >
-                <span
-                  className={`h-1 w-5 rounded-full ${
-                    route.id ===
-                    'accessible'
-                      ? 'bg-accessible-500'
-                      : route.id ===
-                          'fastest'
-                        ? 'bg-primary-600'
-                        : 'bg-warning-500'
-                  }`}
-                />
-
-                <span className="text-slate-600">
-                  {route.title}
-                </span>
-              </div>
-            ),
-          )}
-
-        </div>
-      )}
-
-
-      {/* ================================================== */}
-      {/* BOTTOM SHEET */}
-      {/* ================================================== */}
-
-      <BottomSheet
-        open
-        maxHeight="78%"
-      >
-
-        <h2 className="mb-1 text-xl font-extrabold text-slate-900">
-          Choose your route
-        </h2>
-
-        <p className="mb-3 text-xs text-slate-500">
-          to {destination.name}
-        </p>
-
-
-        {/* ================================================= */}
-        {/* LOCATION LOADING */}
-        {/* ================================================= */}
-
-        {loadingLocation && (
-          <div className="py-8 text-center">
-
-            <div className="mx-auto h-7 w-7 animate-spin rounded-full border-4 border-slate-200 border-t-primary-600" />
-
-            <p className="mt-3 text-sm text-slate-500">
-              Getting your current location...
-            </p>
-
-            <p className="mt-1 text-xs text-slate-400">
-              Please allow location access when your browser asks.
-            </p>
-
+              <p className="mt-1 text-sm text-slate-500">
+                We cannot calculate a
+                route for this location.
+              </p>
+            </div>
           </div>
         )}
 
+        <div className="px-5 pb-6 pt-5">
+          {/* -------------------------------------------------
+              LOCATION STATUS
+          ------------------------------------------------- */}
 
-        {/* ================================================= */}
-        {/* ERROR */}
-        {/* ================================================= */}
-
-        {!loadingLocation &&
-          error && (
-            <div className="rounded-2xl border border-danger-100 bg-danger-50 p-4">
-
-              <div className="flex items-start gap-3">
-
-                <AlertTriangle
-                  size={20}
-                  className="mt-0.5 shrink-0 text-danger-500"
-                />
-
-                <div>
-
-                  <p className="text-sm font-bold text-danger-700">
-                    {error}
-                  </p>
-
-                  <p className="mt-1 text-xs leading-5 text-danger-600">
-                    Check your browser's location permission and make sure you are using the app from a secure local environment.
-                  </p>
-
-                </div>
-
-              </div>
-
-            </div>
-          )}
-
-
-        {/* ================================================= */}
-        {/* ROUTE LOADING */}
-        {/* ================================================= */}
-
-        {!loadingLocation &&
-          !error &&
-          loadingRoute && (
-            <div className="py-8 text-center">
-
-              <div className="mx-auto h-7 w-7 animate-spin rounded-full border-4 border-slate-200 border-t-primary-600" />
-
-              <p className="mt-3 text-sm text-slate-500">
-                Calculating your route...
-              </p>
-
-              <p className="mt-1 text-xs text-slate-400">
-                Finding a road route to{' '}
-                {destination.name}
-              </p>
-
-            </div>
-          )}
-
-
-        {/* ================================================= */}
-        {/* NO ROUTE */}
-        {/* ================================================= */}
-
-        {!loadingLocation &&
-          !error &&
-          !loadingRoute &&
-          routes.length === 0 && (
-            <div className="py-8 text-center">
-
-              <MapPin
-                size={28}
-                className="mx-auto text-slate-300"
+          {locationLoading && (
+            <div className="mb-4 flex items-center gap-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm text-blue-700">
+              <Loader2
+                size={18}
+                className="animate-spin"
               />
 
-              <p className="mt-3 text-sm font-semibold text-slate-600">
-                No route available
-              </p>
-
-              <p className="mt-1 text-xs text-slate-400">
-                Try selecting the destination again.
-              </p>
-
+              Detecting your current
+              location...
             </div>
           )}
 
+          {!locationLoading &&
+            locationError && (
+              <div className="mb-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle
+                    size={19}
+                    className="mt-0.5 shrink-0"
+                  />
 
-        {/* ================================================= */}
-        {/* ACCESSIBILITY SUMMARY */}
-        {/* ================================================= */}
-
-        {!loadingLocation &&
-          !error &&
-          !loadingRoute &&
-          accessibilityAvailable && (
-            <div className="mb-3 rounded-2xl border border-accessible-200 bg-accessible-50 p-3">
-
-              <div className="flex items-start gap-3">
-
-                <span className="text-xl">
-                  {mode === 'wheelchair'
-                    ? '♿'
-                    : '👁️'}
-                </span>
-
-                <div className="min-w-0">
-
-                  <p className="text-sm font-bold text-accessible-800">
-                    {mode === 'wheelchair'
-                      ? 'Wheelchair accessibility information'
-                      : 'Low-vision accessibility information'}
-                  </p>
-
-                  <p className="mt-1 text-xs leading-5 text-accessible-700">
-                    {accessibilityPoints.length}{' '}
-                    accessibility point
-                    {accessibilityPoints.length ===
-                    1
-                      ? ''
-                      : 's'}{' '}
-                    found for this destination.
-                  </p>
-
+                  <span>
+                    {locationError}
+                  </span>
                 </div>
-
               </div>
+            )}
 
-            </div>
-          )}
+          {/* -------------------------------------------------
+              ACCESSIBILITY STATUS
+          ------------------------------------------------- */}
 
-
-        {/* ================================================= */}
-        {/* NO ACCESSIBILITY DATA */}
-        {/* ================================================= */}
-
-        {!loadingLocation &&
-          !error &&
-          !loadingRoute &&
-          !loadingAccessibility &&
-          !accessibilityAvailable && (
-            <div className="mb-3 rounded-2xl border border-warning-200 bg-warning-50 p-3">
-
+          {!destinationPlaceId && (
+            <div className="mb-5 rounded-2xl border border-amber-300 bg-amber-50 p-4">
               <div className="flex items-start gap-3">
-
                 <AlertTriangle
-                  size={18}
-                  className="mt-0.5 shrink-0 text-warning-600"
+                  size={22}
+                  className="mt-0.5 shrink-0 text-amber-600"
                 />
 
                 <div>
+                  <h2 className="font-bold text-amber-900">
+                    Accessibility data not
+                    verified
+                  </h2>
 
-                  <p className="text-sm font-bold text-warning-800">
-                    Accessibility data unavailable
+                  <p className="mt-1 text-sm leading-5 text-amber-800">
+                    This destination came
+                    from map search. We can
+                    calculate a standard road
+                    route, but AccessMob does
+                    not currently have verified
+                    accessibility data for this
+                    location.
                   </p>
-
-                  <p className="mt-1 text-xs leading-5 text-warning-700">
-                    The road route can still be calculated, but this destination does not currently have structured accessibility information in AccessMob.
-                  </p>
-
                 </div>
-
               </div>
-
             </div>
           )}
 
+          {destinationPlaceId &&
+            accessibilityLoading && (
+              <div className="mb-5 flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                <Loader2
+                  size={18}
+                  className="animate-spin"
+                />
 
-        {/* ================================================= */}
-        {/* ROUTES */}
-        {/* ================================================= */}
+                Loading accessibility
+                information...
+              </div>
+            )}
 
-        {!loadingLocation &&
-          !error &&
-          !loadingRoute &&
-          routes.length > 0 && (
+          {destinationPlaceId &&
+            !accessibilityLoading &&
+            accessibilityError && (
+              <div className="mb-5 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle
+                    size={21}
+                    className="mt-0.5 shrink-0 text-amber-600"
+                  />
 
-            <div className="space-y-2.5">
+                  <div>
+                    <h2 className="font-bold text-amber-900">
+                      Accessibility information
+                      unavailable
+                    </h2>
 
-              {routes.map(
-                (route) => {
+                    <p className="mt-1 text-sm leading-5 text-amber-800">
+                      {accessibilityError}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
-                  const selected =
-                    selectedRoute ===
-                    route.id;
+          {destinationPlaceId &&
+            !accessibilityLoading &&
+            !accessibilityError &&
+            placeAccessibility && (
+              <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                <div className="flex items-start gap-3">
+                  <ShieldCheck
+                    size={22}
+                    className="mt-0.5 shrink-0 text-emerald-600"
+                  />
 
-                  return (
-                    <button
-                      key={route.id}
-                      onClick={() =>
-                        setSelectedRoute(
-                          route.id,
-                        )
-                      }
-                      className={`w-full rounded-2xl border-2 p-4 text-left transition-all active:scale-[0.99] ${
-                        selected
-                          ? 'border-primary-600 bg-primary-50 shadow-card'
-                          : 'border-slate-200 bg-white'
-                      }`}
-                    >
+                  <div className="min-w-0">
+                    <h2 className="font-bold text-emerald-900">
+                      Accessibility data
+                      available
+                    </h2>
 
-                      <div className="flex items-center justify-between">
-
-                        <div className="flex items-center gap-2">
-
-                          <span className="text-xl">
-                            {route.emoji}
-                          </span>
-
-                          <div>
-
-                            <span className="text-base font-extrabold uppercase tracking-wide text-slate-900">
-                              {route.title}
-                            </span>
-
-                            <p className="text-[10px] font-semibold text-slate-400">
-                              {route.tag}
-                            </p>
-
-                          </div>
-
-                        </div>
-
-
-                        <div className="text-right">
-
-                          <p className="text-sm font-bold text-slate-900">
-                            {route.time}
-                          </p>
-
-                          <p className="text-xs text-slate-500">
-                            {route.dist}
-                          </p>
-
-                        </div>
-
-                      </div>
-
-
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-
-                        {route.features.map(
-                          (feature) => (
-                            <Pill
+                    {visibleAccessibilityFeatures.length >
+                      0 && (
+                      <div className="mt-2 space-y-1">
+                        {visibleAccessibilityFeatures.map(
+                          (
+                            feature,
+                          ) => (
+                            <div
                               key={
-                                feature.text
+                                feature
                               }
-                              ok={
-                                feature.ok
-                              }
+                              className="flex items-center gap-2 text-sm text-emerald-800"
                             >
-                              {
-                                feature.text
-                              }
-                            </Pill>
+                              <CheckCircle2
+                                size={
+                                  15
+                                }
+                              />
+
+                              <span>
+                                {
+                                  feature
+                                }
+                              </span>
+                            </div>
                           ),
                         )}
-
                       </div>
+                    )}
 
+                    {placeAccessibility.warnings &&
+                      placeAccessibility
+                        .warnings.length >
+                        0 && (
+                        <div className="mt-3 border-t border-emerald-200 pt-3">
+                          {placeAccessibility.warnings.map(
+                            (
+                              warning,
+                            ) => (
+                              <div
+                                key={
+                                  warning
+                                }
+                                className="flex items-start gap-2 text-sm text-amber-800"
+                              >
+                                <AlertTriangle
+                                  size={
+                                    15
+                                  }
+                                  className="mt-0.5 shrink-0"
+                                />
 
-                      {route.badge && (
-                        <p className="mt-2 text-xs font-bold text-accessible-700">
-                          ✓ {route.badge}
-                        </p>
+                                <span>
+                                  {
+                                    warning
+                                  }
+                                </span>
+                              </div>
+                            ),
+                          )}
+                        </div>
                       )}
+                  </div>
+                </div>
+              </div>
+            )}
 
-                    </button>
-                  );
-                },
-              )}
+          {/* -------------------------------------------------
+              ROUTES HEADER
+          ------------------------------------------------- */}
 
+          <div className="mb-4">
+            <div className="flex items-center gap-2">
+              <Navigation
+                size={22}
+                className="text-primary-600"
+              />
+
+              <h2 className="text-xl font-extrabold text-slate-900">
+                Available routes
+              </h2>
+            </div>
+
+            <p className="mt-1 text-sm text-slate-500">
+              {hasAccessibilityData
+                ? 'Choose a route based on your accessibility needs and the available data.'
+                : 'Choose a road route. Accessibility conditions are not verified for this destination.'}
+            </p>
+          </div>
+
+          {/* -------------------------------------------------
+              ROUTE LOADING
+          ------------------------------------------------- */}
+
+          {routeLoading && (
+            <div className="mb-4 flex items-center justify-center gap-3 rounded-2xl bg-white px-5 py-6 shadow-sm">
+              <Loader2
+                size={22}
+                className="animate-spin text-primary-600"
+              />
+
+              <span className="font-semibold text-slate-700">
+                Calculating road routes...
+              </span>
             </div>
           )}
 
+          {/* -------------------------------------------------
+              ROUTE ERROR
+          ------------------------------------------------- */}
 
-        {/* ================================================= */}
-        {/* START ROUTE */}
-        {/* ================================================= */}
+          {!routeLoading &&
+            routeError && (
+              <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle
+                    size={21}
+                    className="mt-0.5 shrink-0 text-red-600"
+                  />
 
-        <div className="mt-4 pb-2">
+                  <div>
+                    <h3 className="font-bold text-red-900">
+                      Route unavailable
+                    </h3>
 
-          <Button
-            fullWidth
-            disabled={
-              loadingLocation ||
-              loadingRoute ||
-              !!error ||
-              routes.length === 0
-            }
-            onClick={() =>
-              go('navigation')
-            }
-            className="text-lg"
-          >
+                    <p className="mt-1 text-sm text-red-800">
+                      {routeError}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
-            <Navigation
-              size={18}
-            />
+          {/* -------------------------------------------------
+              ROUTE CARDS
+          ------------------------------------------------- */}
 
-            Start Route
+          {!routeLoading &&
+            routeCards.length >
+              0 && (
+              <div className="space-y-3">
+                {routeCards.map(
+                  (route) => {
+                    const selected =
+                      route.id ===
+                      selectedRoute;
 
-          </Button>
+                    return (
+                      <button
+                        key={
+                          route.id
+                        }
+                        type="button"
+                        onClick={() =>
+                          setSelectedRoute(
+                            route.id,
+                          )
+                        }
+                        className={`w-full rounded-2xl border p-4 text-left transition ${
+                          selected
+                            ? 'border-primary-500 bg-primary-50 shadow-md'
+                            : 'border-slate-200 bg-white shadow-sm hover:border-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-2xl shadow-sm">
+                            {
+                              route.emoji
+                            }
+                          </div>
 
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <h3 className="text-base font-extrabold text-slate-900">
+                                  {
+                                    route.title
+                                  }
+                                </h3>
+
+                                <p className="mt-0.5 text-xs font-semibold text-primary-700">
+                                  {
+                                    route.tag
+                                  }
+                                </p>
+                              </div>
+
+                              {selected && (
+                                <CheckCircle2
+                                  size={
+                                    23
+                                  }
+                                  className="shrink-0 text-primary-600"
+                                />
+                              )}
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-600">
+                              <span className="flex items-center gap-1.5">
+                                <MapPin
+                                  size={
+                                    16
+                                  }
+                                />
+
+                                {route.distanceKm.toFixed(
+                                  1,
+                                )}{' '}
+                                km
+                              </span>
+
+                              <span className="flex items-center gap-1.5">
+                                <Clock3
+                                  size={
+                                    16
+                                  }
+                                />
+
+                                {Math.max(
+                                  1,
+                                  Math.round(
+                                    route.durationMin,
+                                  ),
+                                )}{' '}
+                                min
+                              </span>
+                            </div>
+
+                            <div className="mt-3 space-y-1.5">
+                              {route.features
+                                .slice(
+                                  0,
+                                  3,
+                                )
+                                .map(
+                                  (
+                                    feature,
+                                    index,
+                                  ) => (
+                                    <div
+                                      key={`${route.id}-${index}`}
+                                      className="flex items-start gap-2 text-xs text-slate-600"
+                                    >
+                                      {hasAccessibilityData &&
+                                      route.id ===
+                                        'accessible' ? (
+                                        <Accessibility
+                                          size={
+                                            14
+                                          }
+                                          className="mt-0.5 shrink-0 text-emerald-600"
+                                        />
+                                      ) : (
+                                        <Footprints
+                                          size={
+                                            14
+                                          }
+                                          className="mt-0.5 shrink-0 text-slate-500"
+                                        />
+                                      )}
+
+                                      <span>
+                                        {
+                                          feature
+                                        }
+                                      </span>
+                                    </div>
+                                  ),
+                                )}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  },
+                )}
+              </div>
+            )}
+
+          {/* -------------------------------------------------
+              NO ROUTES
+          ------------------------------------------------- */}
+
+          {!routeLoading &&
+            !routeError &&
+            routeCards.length ===
+              0 && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 text-center shadow-sm">
+                <RouteIcon
+                  size={30}
+                  className="mx-auto text-slate-400"
+                />
+
+                <h3 className="mt-3 font-bold text-slate-800">
+                  No route options yet
+                </h3>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  We are still trying to
+                  calculate a road route.
+                </p>
+              </div>
+            )}
+
+          {/* -------------------------------------------------
+              IMPORTANT ROUTING NOTICE
+          ------------------------------------------------- */}
+
+          <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-start gap-3">
+              <RouteIcon
+                size={20}
+                className="mt-0.5 shrink-0 text-slate-500"
+              />
+
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">
+                  About this route
+                </h3>
+
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  {hasAccessibilityData
+                    ? 'Road routing is used for the route geometry. AccessMob accessibility information is shown separately and should be treated as location data, not as a guarantee that every route segment is accessible.'
+                    : 'This destination can still be navigated using the road route. Because it came from map search and has no AccessMob accessibility record, accessibility conditions have not been verified.'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="h-4" />
         </div>
+      </div>
 
-      </BottomSheet>
+      {/* =====================================================
+          STICKY START ROUTE BUTTON
+      ===================================================== */}
 
+      <div className="shrink-0 border-t border-slate-200 bg-white p-4 shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">
+        <button
+          type="button"
+          disabled={
+            !selectedRouteCard ||
+            routeLoading ||
+            !!routeError
+          }
+          onClick={() =>
+            go('navigation')
+          }
+          className={`flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-4 text-base font-extrabold shadow-lg transition ${
+            selectedRouteCard &&
+            !routeLoading &&
+            !routeError
+              ? 'bg-primary-600 text-white active:scale-[0.99]'
+              : 'cursor-not-allowed bg-slate-200 text-slate-400'
+          }`}
+        >
+          <Navigation
+            size={20}
+          />
+
+          Start Route
+        </button>
+      </div>
     </div>
-  );
-}
-
-
-// ============================================================
-// PILL
-// ============================================================
-
-function Pill({
-  children,
-  ok,
-}: {
-  children: React.ReactNode;
-  ok?: boolean;
-}) {
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
-        ok
-          ? 'bg-accessible-100 text-accessible-700'
-          : 'bg-danger-100 text-danger-700'
-      }`}
-    >
-
-      {ok ? (
-        <Check
-          size={11}
-          strokeWidth={3}
-        />
-      ) : (
-        <AlertTriangle
-          size={11}
-          strokeWidth={3}
-        />
-      )}
-
-      {children}
-
-    </span>
   );
 }
