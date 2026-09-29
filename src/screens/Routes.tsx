@@ -31,10 +31,11 @@ import {
 import {
   getAccessibilityRoutes,
   getPlaceAccessibility,
+  getAccessibilityRoutesByLocation,
   type AccessibilityMode,
   type BackendRoute,
   type PlaceAccessibility,
-} from '../api';
+} from '@/api';
 
 import { useApp } from '../store';
 
@@ -52,12 +53,30 @@ interface RouteMetadata {
   features: string[];
 }
 
+interface OsrmStep {
+  distance: number;
+  duration: number;
+  name?: string;
+  mode?: string;
+  maneuver: {
+    location: [number, number];
+    bearing_before?: number;
+    bearing_after?: number;
+    type: string;
+    modifier?: string;
+    exit?: number;
+  };
+}
+
 interface OsrmRoute {
   distance: number;
   duration: number;
   geometry: {
     coordinates: [number, number][];
   };
+  legs?: Array<{
+    steps?: OsrmStep[];
+  }>;
 }
 
 interface OsrmResponse {
@@ -80,12 +99,12 @@ const DEFAULT_ROUTE_METADATA: Record<
   RouteMetadata
 > = {
   accessible: {
-    title: 'Standard Route',
-    emoji: '🧭',
-    tag: 'Road route • accessibility not verified',
+    title: 'Accessible Route',
+    emoji: '♿',
+    tag: '🟢 Verified accessibility data',
     features: [
-      'Route calculated from the road network',
-      'Accessibility conditions are not verified',
+      'Accessibility information available',
+      'Accessibility-focused route',
     ],
   },
 
@@ -95,17 +114,17 @@ const DEFAULT_ROUTE_METADATA: Record<
     tag: 'Shortest estimated travel time',
     features: [
       'Route calculated from the road network',
-      'Accessibility conditions are not verified',
+      'Fastest available road route',
     ],
   },
 
   clear: {
-    title: 'Alternative Route',
-    emoji: '🛣️',
-    tag: 'Alternative road route',
+    title: 'Clear Route',
+    emoji: '👁',
+    tag: 'Fewer obstacles and clearer crossings',
     features: [
-      'Alternative route from the road network',
-      'Accessibility conditions are not verified',
+      'Route calculated from the road network',
+      'Clear-route information available',
     ],
   },
 };
@@ -160,47 +179,59 @@ const currentLocationIcon =
     iconAnchor: [12, 12],
   });
 
-function MapController({
-  currentLocation,
-  destination,
-}: {
-  currentLocation: [number, number] | null;
-  destination: [number, number];
-}) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!currentLocation) {
-      map.flyTo(
-        destination,
-        15,
-        {
+  function MapController({
+    currentLocation,
+    destination,
+    routeCoordinates,
+  }: {
+    currentLocation: [number, number] | null;
+    destination: [number, number];
+    routeCoordinates: [number, number][];
+  }) {
+    const map = useMap();
+  
+    useEffect(() => {
+      if (routeCoordinates.length > 1) {
+        const bounds = L.latLngBounds(
+          routeCoordinates,
+        );
+  
+        map.fitBounds(bounds, {
+          padding: [40, 40],
+          maxZoom: 15,
+          animate: true,
+        });
+  
+        return;
+      }
+  
+      if (!currentLocation) {
+        map.flyTo(destination, 15, {
           duration: 0.8,
-        },
-      );
-
-      return;
-    }
-
-    const bounds =
-      L.latLngBounds([
+        });
+  
+        return;
+      }
+  
+      const bounds = L.latLngBounds([
         currentLocation,
         destination,
       ]);
-
-    map.fitBounds(bounds, {
-      padding: [40, 40],
-      maxZoom: 15,
-      animate: true,
-    });
-  }, [
-    currentLocation,
-    destination,
-    map,
-  ]);
-
-  return null;
-}
+  
+      map.fitBounds(bounds, {
+        padding: [40, 40],
+        maxZoom: 15,
+        animate: true,
+      });
+    }, [
+      currentLocation,
+      destination,
+      routeCoordinates,
+      map,
+    ]);
+  
+    return null;
+  }
 
 function formatDistance(
   meters: number,
@@ -251,7 +282,7 @@ function getBackendRoute(
     routes.find(
       (route) =>
         route.id === id ||
-        route.name
+        route.title
           ?.toLowerCase()
           .includes(id),
     ) ?? null
@@ -272,26 +303,34 @@ function getRouteMetadata(
   if (backendRoute) {
     return {
       title:
-        backendRoute.name ||
-        DEFAULT_ROUTE_METADATA[id]
-          .title,
+        backendRoute.title ||
+        DEFAULT_ROUTE_METADATA[id] 
+        .title,
 
-      emoji:
-        DEFAULT_ROUTE_METADATA[id]
-          .emoji,
+        emoji:
+        backendRoute.emoji ||
+        DEFAULT_ROUTE_METADATA[id].emoji,
 
-      tag:
-        hasAccessibilityData
-          ? 'Accessibility data available'
-          : DEFAULT_ROUTE_METADATA[id]
-              .tag,
+        tag:
+  hasAccessibilityData &&
+  id === 'accessible'
+    ? '🟢 Verified accessibility data'
+    : DEFAULT_ROUTE_METADATA[id].tag,
 
-      features:
-        backendRoute.features &&
-        backendRoute.features.length > 0
-          ? backendRoute.features
-          : DEFAULT_ROUTE_METADATA[id]
-              .features,
+    features:
+  backendRoute.features &&
+  backendRoute.features.length > 0
+    ? backendRoute.features.map((feature) =>
+        typeof feature === 'string'
+          ? feature
+          : typeof feature === 'object' &&
+              feature !== null &&
+              'text' in feature &&
+              typeof feature.text === 'string'
+            ? feature.text
+            : String(feature),
+      )
+    : DEFAULT_ROUTE_METADATA[id].features,
     };
   }
 
@@ -300,11 +339,9 @@ function getRouteMetadata(
     id === 'accessible'
   ) {
     return {
-      title:
-        'Accessibility Route',
+      title: 'Most Accessible',
       emoji: '♿',
-      tag:
-        'Accessibility data available',
+      tag: 'Accessibility-focused route',
       features: [
         'Accessibility information available',
         'Route geometry from road routing',
@@ -385,14 +422,17 @@ function RouteMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        <MapController
-          currentLocation={
-            currentLocation
-          }
-          destination={
-            destinationPoint
-          }
-        />
+<MapController
+  currentLocation={
+    currentLocation
+  }
+  destination={
+    destinationPoint
+  }
+  routeCoordinates={
+    routeCoordinates
+  }
+/>
 
         {currentLocation && (
           <Marker
@@ -413,6 +453,12 @@ function RouteMap({
             destinationIcon
           }
         />
+
+console.log(
+  'ROUTE COORDINATES:',
+  routeCoordinates.length,
+  routeCoordinates,
+);
 
         {routeCoordinates.length >
           1 && (
@@ -449,16 +495,19 @@ function RouteMap({
       </MapContainer>
 
       <div className="absolute left-3 top-3 z-[500] flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-lg">
-        <RouteIcon
-          size={17}
-          className="text-primary-600"
-        />
+  <RouteIcon
+    size={17}
+    className="text-primary-600"
+  />
 
-        {routeCoordinates.length >
-        1
-          ? 'Route calculated'
-          : 'Calculating route...'}
-      </div>
+  {routeCoordinates.length > 1
+    ? selectedRoute === 'accessible'
+      ? '♿ Accessible route'
+      : selectedRoute === 'clear'
+        ? '👁 Clear route'
+        : '⚡ Fastest route'
+    : 'Calculating route...'}
+</div>
 
       <div className="absolute bottom-2 right-2 z-[500] rounded bg-white/90 px-2 py-1 text-[10px] text-slate-500 shadow">
         Leaflet | © OpenStreetMap
@@ -502,6 +551,16 @@ export default function Routes() {
   >(null);
 
   const [
+    nearbyAccessibilitySource,
+    setNearbyAccessibilitySource,
+  ] =
+    useState<{
+      placeId?: string;
+      placeName?: string;
+      distanceKm?: number;
+    } | null>(null);
+
+  const [
     placeAccessibility,
     setPlaceAccessibility,
   ] =
@@ -533,6 +592,19 @@ export default function Routes() {
     routeError,
     setRouteError,
   ] = useState('');
+
+
+  const [routeSteps, setRouteSteps] =
+  useState<OsrmStep[]>([]);
+
+  const [currentStepIndex, setCurrentStepIndex] =
+  useState(0);
+
+  const currentStep =
+  routeSteps[currentStepIndex] ?? null;
+
+ const nextStep =
+  routeSteps[currentStepIndex + 1] ?? null;
 
   if (!destination) {
     return (
@@ -581,9 +653,157 @@ export default function Routes() {
     destination.place?.id ??
     null;
 
-  const hasAccessibilityData =
-    destinationPlaceId !== null &&
-    placeAccessibility !== null;
+
+    const hasAccessibilityData =
+    placeAccessibility !== null ||
+    (backendRoutes !== null &&
+      backendRoutes.length > 0);
+
+    useEffect(() => {
+      let cancelled = false;
+  
+      async function loadAccessibilityData() {
+        if (!destination) {
+          setBackendRoutes(null);
+          setPlaceAccessibility(null);
+          setAccessibilityError('');
+          setAccessibilityLoading(false);
+          return;
+        }
+  
+        try {
+          setAccessibilityLoading(true);
+          setAccessibilityError('');
+  
+          // Destination exists in our accessibility database
+          if (destinationPlaceId) {
+            const [
+              accessibility,
+              routes,
+            ] = await Promise.all([
+              getPlaceAccessibility(
+                destinationPlaceId,
+              ),
+  
+              getAccessibilityRoutes(
+                destinationPlaceId,
+                mode as AccessibilityMode,
+              ),
+            ]);
+  
+            if (cancelled) {
+              return;
+            }
+  
+            setPlaceAccessibility(
+              accessibility,
+            );
+  
+            setBackendRoutes(
+              routes,
+            );
+  
+            return;
+          }
+  
+          // Destination came from map search.
+          // Use its coordinates instead.
+          if (
+            Number.isFinite(destination.lat) &&
+            Number.isFinite(destination.lng)
+          ) {
+
+            console.log(
+              'DESTINATION:',
+              destination,
+            );
+            
+            console.log(
+              'DESTINATION COORDINATES:',
+              destination.lat,
+              destination.lng,
+            ); 
+
+            const response =
+  await getAccessibilityRoutesByLocation(
+  destination.lat,
+  destination.lng,
+  mode as AccessibilityMode,
+  3,
+);
+
+console.log(
+  'ACCESSIBILITY BY LOCATION RESPONSE:',
+  response,
+);
+
+if (cancelled) {
+  return;
+}
+if (cancelled) {
+  return;
+}
+
+setPlaceAccessibility(null);
+
+setBackendRoutes(
+  response.routes ?? [],
+);
+
+setNearbyAccessibilitySource(
+  response.sourcePlaceId
+    ? {
+        placeId:
+          response.sourcePlaceId,
+        placeName:
+          response.sourcePlaceName,
+        distanceKm:
+          response.sourceDistanceKm,
+      }
+    : null,
+);
+
+return;
+
+          }
+  
+          setBackendRoutes(null);
+          setPlaceAccessibility(null);
+  
+        } catch (error) {
+          if (cancelled) {
+            return;
+          }
+  
+          console.error(
+            'Failed to load accessibility data:',
+            error,
+          );
+  
+          setAccessibilityError(
+            'Accessibility information could not be loaded. Standard road routing is still available.',
+          );
+  
+          setBackendRoutes(null);
+          setPlaceAccessibility(null);
+  
+        } finally {
+          if (!cancelled) {
+            setAccessibilityLoading(false);
+          }
+        }
+      }
+  
+      loadAccessibilityData();
+  
+      return () => {
+        cancelled = true;
+      };
+    }, [
+      destination,
+      destinationPlaceId,
+      mode,
+    ]);
 
   /*
    * -------------------------------------------------------
@@ -658,75 +878,137 @@ export default function Routes() {
 
   useEffect(() => {
     let cancelled = false;
-
+  
     async function loadAccessibilityData() {
-      if (!destinationPlaceId) {
+      /*
+       * We always need a destination.
+       */
+      if (!destination) {
         setBackendRoutes(null);
         setPlaceAccessibility(null);
         setAccessibilityError('');
         setAccessibilityLoading(false);
         return;
       }
-
+  
       try {
         setAccessibilityLoading(true);
         setAccessibilityError('');
-
-        const [
-          accessibility,
-          routes,
-        ] = await Promise.all([
-          getPlaceAccessibility(
-            destinationPlaceId,
-          ),
-          getAccessibilityRoutes(
-            destinationPlaceId,
-            mode as AccessibilityMode,
-          ),
-        ]);
-
-        if (cancelled) {
+  
+        /*
+         * =====================================================
+         * CASE 1:
+         * Destination exists in our accessibility database
+         * =====================================================
+         */
+        if (destinationPlaceId) {
+          const [
+            accessibility,
+            routes,
+          ] = await Promise.all([
+            getPlaceAccessibility(
+              destinationPlaceId,
+            ),
+  
+            getAccessibilityRoutes(
+              destinationPlaceId,
+              mode as AccessibilityMode,
+            ),
+          ]);
+  
+          if (cancelled) {
+            return;
+          }
+  
+          setPlaceAccessibility(
+            accessibility,
+          );
+  
+          setBackendRoutes(
+            routes,
+          );
+  
           return;
         }
+  
+        /*
+         * =====================================================
+         * CASE 2:
+         * Destination came from map search
+         *
+         * It may not exist in our MongoDB accessibility
+         * database, so we use its coordinates instead.
+         * =====================================================
+         */
+        if (
+          Number.isFinite(destination.lat) &&
+          Number.isFinite(destination.lng)
+        ) {
+          const response =
+  await getAccessibilityRoutesByLocation(
+    destination.lat,
+    destination.lng,
+    mode as AccessibilityMode,
+    1,
+  );
 
-        setPlaceAccessibility(
-          accessibility,
-        );
+if (cancelled) {
+  return;
+}
 
-        setBackendRoutes(
-          routes,
-        );
+setBackendRoutes(response.routes);
+  
+          /*
+           * There is no specific PlaceAccessibility record
+           * for an arbitrary searched location.
+           */
+          setPlaceAccessibility(null);
+
+setBackendRoutes(
+  response.routes,
+);
+
+return;
+        }
+  
+        /*
+         * Destination exists but has neither a place ID
+         * nor usable coordinates.
+         */
+        setBackendRoutes(null);
+        setPlaceAccessibility(null);
+  
       } catch (error) {
         if (cancelled) {
           return;
         }
-
+  
         console.error(
           'Failed to load accessibility data:',
           error,
         );
-
+  
         setAccessibilityError(
           'Accessibility information could not be loaded. Standard road routing is still available.',
         );
-
+  
         setBackendRoutes(null);
         setPlaceAccessibility(null);
+  
       } finally {
         if (!cancelled) {
-          setAccessibilityLoading(
-            false,
-          );
+          setAccessibilityLoading(false);
         }
       }
     }
-
+  
     loadAccessibilityData();
-
+  
     return () => {
       cancelled = true;
     };
   }, [
+    destination,
     destinationPlaceId,
     mode,
   ]);
@@ -772,11 +1054,10 @@ export default function Routes() {
         ] = destinationPoint;
 
         const url =
-          `https://router.project-osrm.org/route/v1/driving/` +
-          `${currentLng},${currentLat};` +
-          `${destinationLng},${destinationLat}` +
-          `?overview=full&geometries=geojson&alternatives=true`;
-
+  `https://router.project-osrm.org/route/v1/driving/` +
+  `${currentLng},${currentLat};` +
+  `${destinationLng},${destinationLat}` +
+  `?overview=full&geometries=geojson&alternatives=true&steps=true`;
         const response =
           await fetch(url);
 
@@ -788,6 +1069,10 @@ export default function Routes() {
 
         const data =
           (await response.json()) as OsrmResponse;
+          console.log(
+            'OSRM ROUTE STEPS:',
+            data.routes?.[0]?.legs?.[0]?.steps,
+          );
 
         if (
           !Array.isArray(
@@ -805,8 +1090,17 @@ export default function Routes() {
         }
 
         setOsrmRoutes(
-          data.routes.slice(0, 3),
-        );
+  data.routes.slice(0, 3),
+);
+
+const steps =
+  data.routes[0]?.legs?.flatMap(
+    (leg) => leg.steps ?? [],
+  ) ?? [];
+
+setRouteSteps(steps);
+setCurrentStepIndex(0);
+
       } catch (error) {
         if (cancelled) {
           return;
@@ -843,6 +1137,16 @@ export default function Routes() {
    * BUILD ROUTE CARDS
    * -------------------------------------------------------
    */
+  console.log(
+    'BACKEND ROUTES IN CARD BUILDER:',
+    backendRoutes,
+  );
+  
+  console.log(
+    'HAS ACCESSIBILITY DATA:',
+    hasAccessibilityData,
+  );
+
 
   const routeCards =
     useMemo<RouteCard[]>(() => {
@@ -1126,34 +1430,37 @@ export default function Routes() {
               ACCESSIBILITY STATUS
           ------------------------------------------------- */}
 
-          {!destinationPlaceId && (
-            <div className="mb-5 rounded-2xl border border-amber-300 bg-amber-50 p-4">
-              <div className="flex items-start gap-3">
-                <AlertTriangle
-                  size={22}
-                  className="mt-0.5 shrink-0 text-amber-600"
-                />
+{!destinationPlaceId &&
+  nearbyAccessibilitySource && (
+    <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+      <div className="flex items-start gap-3">
+        <ShieldCheck
+          size={22}
+          className="mt-0.5 shrink-0 text-emerald-600"
+        />
 
-                <div>
-                  <h2 className="font-bold text-amber-900">
-                    Accessibility data not
-                    verified
-                  </h2>
+        <div>
+          <h2 className="font-bold text-emerald-900">
+            Accessibility data found
+          </h2>
 
-                  <p className="mt-1 text-sm leading-5 text-amber-800">
-                    This destination came
-                    from map search. We can
-                    calculate a standard road
-                    route, but AccessMob does
-                    not currently have verified
-                    accessibility data for this
-                    location.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
+          <p className="mt-1 text-sm leading-5 text-emerald-800">
+            Accessibility information was found
+            {nearbyAccessibilitySource.placeName
+              ? ` for ${nearbyAccessibilitySource.placeName}`
+              : ''}
+            {typeof nearbyAccessibilitySource.distanceKm ===
+              'number'
+              ? ` (${nearbyAccessibilitySource.distanceKm.toFixed(
+                  2,
+                )} km away)`
+              : ''}
+            .
+          </p>
+        </div>
+      </div>
+    </div>
+  )}
           {destinationPlaceId &&
             accessibilityLoading && (
               <div className="mb-5 flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
@@ -1228,9 +1535,9 @@ export default function Routes() {
                               />
 
                               <span>
-                                {
-                                  feature
-                                }
+                                {typeof feature === 'string'
+                                  ? feature
+                                  : feature.text}
                               </span>
                             </div>
                           ),
@@ -1354,6 +1661,14 @@ export default function Routes() {
                     const selected =
                       route.id ===
                       selectedRoute;
+                      const backendRoute =
+  getBackendRoute(
+    backendRoutes,
+    route.id,
+  );
+
+const accessibility =
+  backendRoute?.accessibility;
 
                     return (
                       <button
@@ -1368,8 +1683,12 @@ export default function Routes() {
                         }
                         className={`w-full rounded-2xl border p-4 text-left transition ${
                           selected
-                            ? 'border-primary-500 bg-primary-50 shadow-md'
-                            : 'border-slate-200 bg-white shadow-sm hover:border-slate-300'
+                            ? route.id === 'accessible' && hasAccessibilityData
+                              ? 'border-emerald-500 bg-emerald-50 shadow-md'
+                              : 'border-primary-500 bg-primary-50 shadow-md'
+                            : route.id === 'accessible' && hasAccessibilityData
+                              ? 'border-emerald-200 bg-emerald-50/40 shadow-sm hover:border-emerald-300'
+                              : 'border-slate-200 bg-white shadow-sm hover:border-slate-300'
                         }`}
                       >
                         <div className="flex items-start gap-3">
@@ -1389,20 +1708,28 @@ export default function Routes() {
                                 </h3>
 
                                 <p className="mt-0.5 text-xs font-semibold text-primary-700">
-                                  {
-                                    route.tag
-                                  }
-                                </p>
+  {route.tag}
+</p>
+
+{hasAccessibilityData && route.id === 'accessible' && (
+  <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+    <Accessibility size={14} />
+    Verified accessibility data
+  </div>
+)}
                               </div>
 
                               {selected && (
-                                <CheckCircle2
-                                  size={
-                                    23
-                                  }
-                                  className="shrink-0 text-primary-600"
-                                />
-                              )}
+  <CheckCircle2
+    size={23}
+    className={`shrink-0 ${
+      route.id === 'accessible' &&
+      hasAccessibilityData
+        ? 'text-emerald-600'
+        : 'text-primary-600'
+    }`}
+  />
+)}
                             </div>
 
                             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-600">
@@ -1435,6 +1762,23 @@ export default function Routes() {
                                 min
                               </span>
                             </div>
+                            {accessibility && (
+  <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2">
+    <div className="flex items-center justify-between">
+      <span className="text-xs font-bold text-emerald-800">
+        Accessibility score
+      </span>
+
+      <span className="text-sm font-extrabold text-emerald-700">
+        {accessibility.score}/100
+      </span>
+    </div>
+
+    <p className="mt-1 text-xs text-emerald-700">
+      {accessibility.summary}
+    </p>
+  </div>
+)}
 
                             <div className="mt-3 space-y-1.5">
                               {route.features
@@ -1515,6 +1859,81 @@ export default function Routes() {
           {/* -------------------------------------------------
               IMPORTANT ROUTING NOTICE
           ------------------------------------------------- */}
+
+<div className="mt-4 rounded-2xl bg-white p-4 shadow-sm">
+  <h3 className="mb-3 text-sm font-extrabold text-slate-900">
+    Route instructions
+  </h3>
+
+  <div className="space-y-3">
+    {routeSteps.map((step, index) => {
+      const type =
+        step.maneuver?.type;
+
+      const modifier =
+        step.maneuver?.modifier;
+
+      let instruction =
+        'Continue straight';
+
+      if (
+        type === 'arrive'
+      ) {
+        instruction =
+          'Arrive at destination';
+      } else if (
+        modifier === 'left'
+      ) {
+        instruction =
+          'Turn left';
+      } else if (
+        modifier === 'right'
+      ) {
+        instruction =
+          'Turn right';
+      } else if (
+        modifier === 'slight left'
+      ) {
+        instruction =
+          'Slight left';
+      } else if (
+        modifier === 'slight right'
+      ) {
+        instruction =
+          'Slight right';
+      } else if (
+        modifier === 'uturn'
+      ) {
+        instruction =
+          'Make a U-turn';
+      }
+
+      return (
+        <div
+          key={index}
+          className="flex items-center gap-3 rounded-xl bg-slate-50 p-3"
+        >
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-100 font-bold text-primary-700">
+            {index + 1}
+          </div>
+
+          <div className="min-w-0">
+            <div className="font-bold text-slate-900">
+              {instruction}
+            </div>
+
+            <div className="text-xs text-slate-500">
+              {Math.round(step.distance)} m
+              {step.name
+                ? ` • ${step.name}`
+                : ''}
+            </div>
+          </div>
+        </div>
+      );
+    })}
+  </div>
+</div>
 
           <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-start gap-3">

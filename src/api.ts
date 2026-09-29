@@ -256,27 +256,32 @@ export async function getRoutes(
 // ============================================================
 
 export interface AccessibilityRouteResponse {
-  placeId: string;
+  placeId?: string;
   mode: AccessibilityMode;
   routes: BackendRoute[];
-  notice: string;
+  notice?: string;
+  sourcePlaceId?: string;
+  sourcePlaceName?: string;
+  sourceDistanceKm?: number;
 }
 
 
 export async function getAccessibilityRoutes(
   placeId: string,
   mode: AccessibilityMode
-): Promise<AccessibilityRouteResponse> {
-
+): Promise<BackendRoute[]> {
   const params = new URLSearchParams({
     mode,
   });
 
-  return apiFetch(
-    `/api/accessibility/routes/${encodeURIComponent(
-      placeId
-    )}?${params.toString()}`
-  );
+  const response =
+    await apiFetch<AccessibilityRouteResponse>(
+      `/api/accessibility/routes/${encodeURIComponent(
+        placeId
+      )}?${params.toString()}`
+    );
+
+  return response.routes;
 }
 
 
@@ -385,6 +390,24 @@ export async function getAccessibilityPoints(
   );
 }
 
+
+export async function getAccessibilityRoutesByLocation(
+  latitude: number,
+  longitude: number,
+  mode: AccessibilityMode,
+  radiusKm = 1
+): Promise<AccessibilityRouteResponse> {
+  const params = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+    mode,
+    radius: String(radiusKm),
+  });
+
+  return apiFetch<AccessibilityRouteResponse>(
+    `/api/accessibility/routes-by-location?${params.toString()}`
+  );
+}
 
 // ============================================================
 // NAVIGATION

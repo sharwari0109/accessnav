@@ -57,6 +57,46 @@ interface OSRMStep {
   mode?: string;
   maneuver: OSRMManeuver;
 }
+function getInstructionText(
+  step: OSRMStep,
+): string {
+  const type = step.maneuver?.type;
+  const modifier = step.maneuver?.modifier;
+
+  if (type === 'depart') {
+    return 'Start route';
+  }
+
+  if (type === 'arrive') {
+    return 'Arrive at destination';
+  }
+
+  if (modifier === 'left') {
+    return 'Turn left';
+  }
+
+  if (modifier === 'right') {
+    return 'Turn right';
+  }
+
+  if (modifier === 'slight left') {
+    return 'Slight left';
+  }
+
+  if (modifier === 'slight right') {
+    return 'Slight right';
+  }
+
+  if (modifier === 'uturn') {
+    return 'Make a U-turn';
+  }
+
+  if (modifier === 'straight') {
+    return 'Continue straight';
+  }
+
+  return 'Continue on route';
+}
 
 interface OSRMRoute {
   distance: number;
@@ -211,10 +251,16 @@ function createDestinationIcon() {
   });
 }
 
-function FollowCurrentLocation({
+
+
+function FollowRoute({
   currentLocation,
+  routeSteps,
+  currentStepIndex,
 }: {
   currentLocation: RoutePoint | null;
+  routeSteps: OSRMStep[];
+  currentStepIndex: number;
 }) {
   const map = useMap();
 
@@ -228,56 +274,16 @@ function FollowCurrentLocation({
         currentLocation.lat,
         currentLocation.lng,
       ],
-      Math.max(map.getZoom(), 17),
+      17,
       {
         animate: true,
+        duration: 0.5,
       },
     );
   }, [currentLocation, map]);
 
   return null;
 }
-
-function FitRoute({
-  currentLocation,
-  routeCoordinates,
-}: {
-  currentLocation: RoutePoint | null;
-  routeCoordinates: [number, number][];
-}) {
-  const map = useMap();
-  const hasFittedRef = useRef(false);
-
-  useEffect(() => {
-    if (
-      hasFittedRef.current ||
-      !currentLocation ||
-      routeCoordinates.length < 2
-    ) {
-      return;
-    }
-
-    const bounds = L.latLngBounds(
-      routeCoordinates.map(
-        ([lat, lng]) => [lat, lng],
-      ),
-    );
-
-    map.fitBounds(bounds, {
-      padding: [40, 300],
-      maxZoom: 17,
-    });
-
-    hasFittedRef.current = true;
-  }, [
-    map,
-    currentLocation,
-    routeCoordinates,
-  ]);
-
-  return null;
-}
-
 function maneuverSymbol(step: OSRMStep) {
   const type = step.maneuver.type;
   const modifier = step.maneuver.modifier;
@@ -484,6 +490,40 @@ function findInitialStep(
   return 0;
 }
 
+function getDistanceMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): number {
+  const R = 6371000;
+
+  const dLat =
+    ((lat2 - lat1) * Math.PI) / 180;
+
+  const dLng =
+    ((lng2 - lng1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(
+      (lat1 * Math.PI) / 180,
+    ) *
+      Math.cos(
+        (lat2 * Math.PI) / 180,
+      ) *
+      Math.sin(dLng / 2) ** 2;
+
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(a),
+      Math.sqrt(1 - a),
+    );
+
+  return R * c;
+}
+
 export default function Navigation() {
   const {
     destination,
@@ -495,25 +535,27 @@ export default function Navigation() {
   } = useApp();
 
   const [currentLocation, setCurrentLocation] =
-    useState<RoutePoint | null>(null);
+  useState<RoutePoint | null>(null);
 
-  const [routeCoordinates, setRouteCoordinates] =
-    useState<[number, number][]>([]);
+const [routeCoordinates, setRouteCoordinates] =
+  useState<[number, number][]>([]);
 
-  const [routeDistance, setRouteDistance] =
-    useState(0);
+const [routeDistance, setRouteDistance] =
+  useState(0);
 
-  const [routeDuration, setRouteDuration] =
-    useState(0);
+const [routeDuration, setRouteDuration] =
+  useState(0);
 
-  const [routeSteps, setRouteSteps] =
-    useState<OSRMStep[]>([]);
+const [routeSteps, setRouteSteps] =
+  useState<OSRMStep[]>([]);
 
-  const [currentStepIndex, setCurrentStepIndex] =
-    useState(-1);
+const [currentStepIndex, setCurrentStepIndex] =
+  useState(-1);
 
+    
   const [nextStepDistance, setNextStepDistance] =
     useState(0);
+
 
   const [loadingLocation, setLoadingLocation] =
     useState(true);
@@ -574,12 +616,63 @@ export default function Navigation() {
             lat: position.coords.latitude,
             lng: position.coords.longitude,
           };
+          console.log(
+            'GPS UPDATE:',
+            position.coords.latitude,
+            position.coords.longitude,
+            'accuracy:',
+            position.coords.accuracy,
+          );
 
           latestLocationRef.current =
             location;
 
-          setCurrentLocation(location);
-          setLoadingLocation(false);
+            setCurrentLocation(location);
+
+            // Automatically update the current navigation step
+            if (routeSteps.length > 0) {
+              let closestStepIndex =
+                currentStepIndex;
+            
+              for (
+                let i = Math.max(0, currentStepIndex);
+                i < routeSteps.length;
+                i++
+              ) {
+                const step = routeSteps[i];
+            
+                const [
+                  stepLng,
+                  stepLat,
+                ] = step.maneuver.location;
+            
+                const distance =
+                  getDistanceMeters(
+                    location.lat,
+                    location.lng,
+                    stepLat,
+                    stepLng,
+                  );
+            
+                // When we are within 50 metres
+                // of the maneuver, move to it.
+                if (distance < 50) {
+                  closestStepIndex = i;
+                  break;
+                }
+              }
+            
+              if (
+                closestStepIndex !==
+                currentStepIndex
+              ) {
+                setCurrentStepIndex(
+                  closestStepIndex,
+                );
+              }
+            }
+            
+            setLoadingLocation(false);
         },
         (locationError) => {
           console.error(
@@ -618,9 +711,9 @@ export default function Navigation() {
         },
         {
           enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 5000,
-        },
+          timeout: 5000,
+          maximumAge: 1000,
+        }
       );
 
     return () => {
@@ -629,6 +722,73 @@ export default function Navigation() {
       );
     };
   }, []);
+
+  useEffect(() => {
+    if (routeSteps.length === 0) {
+      return;
+    }
+  
+    const interval = window.setInterval(() => {
+      const location =
+        latestLocationRef.current;
+  
+      if (!location) {
+        return;
+      }
+  
+      let closestStepIndex =
+        currentStepIndex >= 0
+          ? currentStepIndex
+          : 0;
+  
+      for (
+        let i = Math.max(
+          0,
+          closestStepIndex,
+        );
+        i < routeSteps.length;
+        i++
+      ) {
+        const step = routeSteps[i];
+  
+        const [
+          stepLng,
+          stepLat,
+        ] = step.maneuver.location;
+  
+        const distance =
+          getDistanceMeters(
+            location.lat,
+            location.lng,
+            stepLat,
+            stepLng,
+          );
+  
+        if (distance < 50) {
+          closestStepIndex = i;
+          break;
+        }
+      }
+  
+      if (
+        closestStepIndex !==
+        currentStepIndex
+      ) {
+        setCurrentStepIndex(
+          closestStepIndex,
+        );
+      }
+    }, 1000);
+  
+    return () => {
+      window.clearInterval(
+        interval,
+      );
+    };
+  }, [
+    routeSteps,
+    currentStepIndex,
+  ]);
 
   /*
    * ------------------------------------------------------------
@@ -1141,9 +1301,14 @@ export default function Navigation() {
   }
 
   const currentStep =
-    currentStepIndex >= 0
-      ? routeSteps[currentStepIndex]
-      : null;
+  currentStepIndex >= 0
+    ? routeSteps[currentStepIndex]
+    : null;
+
+const nextStep =
+  currentStepIndex >= 0
+    ? routeSteps[currentStepIndex + 1] ?? null
+    : null;
 
   const instructionTitle =
     arrived
@@ -1170,32 +1335,41 @@ export default function Navigation() {
           MAP
       ====================================================== */}
 
-      <div className="absolute inset-0">
-        <MapContainer
-          center={[
-            currentLocation?.lat ??
-              destinationPoint.lat,
-            currentLocation?.lng ??
-              destinationPoint.lng,
-          ]}
-          zoom={17}
-          zoomControl={false}
-          className="h-full w-full"
-        >
-          <TileLayer
-            attribution="&copy; OpenStreetMap contributors"
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+<div className="absolute inset-0">
+  <MapContainer
+    center={[
+      currentLocation?.lat ??
+        destinationPoint.lat,
+      currentLocation?.lng ??
+        destinationPoint.lng,
+    ]}
+    zoom={17}
+    zoomControl={false}
+    className="h-full w-full"
+  >
+    <FollowRoute
+  currentLocation={currentLocation}
+  routeSteps={routeSteps}
+  currentStepIndex={currentStepIndex}
+/>
+    
 
-          {currentLocation && (
-            <Marker
-              position={[
-                currentLocation.lat,
-                currentLocation.lng,
-              ]}
-              icon={createCurrentLocationIcon()}
-            />
-          )}
+    <TileLayer
+      attribution="&copy; OpenStreetMap contributors"
+      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+    />
+
+   
+  {currentLocation && (
+    <Marker
+      position={[
+        currentLocation.lat,
+        currentLocation.lng,
+      ]}
+      icon={createCurrentLocationIcon()}
+    />
+  )}
+          
 
           <Marker
             position={[
@@ -1234,20 +1408,10 @@ export default function Navigation() {
             </>
           )}
 
-          <FollowCurrentLocation
-            currentLocation={
-              currentLocation
-            }
-          />
+          
 
-          <FitRoute
-            currentLocation={
-              currentLocation
-            }
-            routeCoordinates={
-              routeCoordinates
-            }
-          />
+          
+          
         </MapContainer>
       </div>
 
@@ -1434,9 +1598,11 @@ export default function Navigation() {
           </div>
 
           <div className="min-w-0 flex-1">
-            <p className="text-lg font-extrabold text-slate-900">
-              {instructionTitle}
-            </p>
+          <p className="text-lg font-extrabold text-slate-900">
+  {currentStep
+    ? getInstructionText(currentStep)
+    : instructionTitle}
+</p>
 
             <p className="text-sm text-slate-500">
               {arrived
@@ -1450,6 +1616,37 @@ export default function Navigation() {
           </div>
         </div>
 
+        {currentStep && (
+  <button
+    type="button"
+    onClick={() => {
+      if (
+        currentStepIndex <
+        routeSteps.length - 1
+      ) {
+        const nextIndex =
+          currentStepIndex + 1;
+    
+        setCurrentStepIndex(
+          nextIndex,
+        );
+    
+        
+      }
+    }}
+    disabled={
+      currentStepIndex >=
+      routeSteps.length - 1
+    }
+    className="mt-4 w-full rounded-2xl bg-primary-600 px-4 py-3.5 text-sm font-extrabold text-white shadow-sm disabled:opacity-50"
+  >
+    {currentStepIndex <
+    routeSteps.length - 1
+      ? 'Next step →'
+      : 'Final step'}
+  </button>
+)}
+
         {/* ACCESSIBILITY STATUS */}
 
         <div className="mt-3 flex items-center gap-3 rounded-2xl bg-accessible-50 p-3">
@@ -1461,7 +1658,7 @@ export default function Navigation() {
 
           <p className="flex-1 text-sm font-semibold text-accessible-800">
             {mode === 'wheelchair'
-              ? 'Wheelchair mode is active. Accessibility obstacles will be checked when accessibility routing data is connected.'
+              ? 'Wheelchair mode is active. Accessibility information will be used to identify potential obstacles and accessible features for this destination.'
               : 'Low-vision mode is active. Use the high-contrast map and voice guidance features where available.'}
           </p>
         </div>
