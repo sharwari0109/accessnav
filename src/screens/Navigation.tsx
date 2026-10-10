@@ -30,11 +30,16 @@ import {
   Polyline,
   TileLayer,
   useMap,
+  useMapEvents,
 } from 'react-leaflet';
 
 import L from 'leaflet';
 
 import 'leaflet/dist/leaflet.css';
+
+/* ------------------------------------------------------------------
+ * TYPES
+ * ------------------------------------------------------------------ */
 
 interface RoutePoint {
   lat: number;
@@ -57,46 +62,6 @@ interface OSRMStep {
   mode?: string;
   maneuver: OSRMManeuver;
 }
-function getInstructionText(
-  step: OSRMStep,
-): string {
-  const type = step.maneuver?.type;
-  const modifier = step.maneuver?.modifier;
-
-  if (type === 'depart') {
-    return 'Start route';
-  }
-
-  if (type === 'arrive') {
-    return 'Arrive at destination';
-  }
-
-  if (modifier === 'left') {
-    return 'Turn left';
-  }
-
-  if (modifier === 'right') {
-    return 'Turn right';
-  }
-
-  if (modifier === 'slight left') {
-    return 'Slight left';
-  }
-
-  if (modifier === 'slight right') {
-    return 'Slight right';
-  }
-
-  if (modifier === 'uturn') {
-    return 'Make a U-turn';
-  }
-
-  if (modifier === 'straight') {
-    return 'Continue straight';
-  }
-
-  return 'Continue on route';
-}
 
 interface OSRMRoute {
   distance: number;
@@ -114,16 +79,300 @@ interface RouteResponse {
   routes?: OSRMRoute[];
 }
 
-function formatDistance(meters: number) {
-  if (!Number.isFinite(meters)) {
-    return '0 m';
+type ModeKey = 'vehicle' | 'wheelchair';
+
+interface RouteData {
+  coordinates: [number, number][];
+  distance: number;
+  duration: number;
+  steps: OSRMStep[];
+  source: 'ORS' | 'OSRM';
+}
+
+interface ORSStep {
+  distance: number;
+  duration: number;
+  type: number;
+  name?: string;
+  way_points: [number, number];
+}
+
+/*
+ * Optional: put VITE_ORS_API_KEY=your_key in accessnav/.env (free key from
+ * openrouteservice.org). With a key, car and wheelchair routes/times come
+ * from OpenRouteService (it has a real "wheelchair" profile). Without a key
+ * the app falls back to the free OSRM servers.
+ */
+const ORS_API_KEY = import.meta.env.VITE_ORS_API_KEY as string | undefined;
+
+/*
+ * Neither OSRM nor OpenRouteService knows live traffic, so car times are
+ * "free-flow" times. This multiplier adds a typical city-traffic allowance.
+ * Set it to 1 to see the raw routing time.
+ */
+const CAR_TRAFFIC_FACTOR = 1.3;
+
+const EMPTY_COORDS: [number, number][] = [];
+const EMPTY_STEPS: OSRMStep[] = [];
+
+/*
+ * Wheelchair assumptions (tweak to taste):
+ * - ~1.1 m/s (about 4 km/h) is a realistic average for a manual chair
+ *   once crossings, kerbs and slopes are included. Power chairs are
+ *   faster but are limited by battery range.
+ * - Up to 2 km is comfortable, up to 5 km is possible but tiring,
+ *   beyond that a vehicle is the practical choice.
+ */
+const WHEELCHAIR_SPEED_MPS = 1.1;
+const WHEELCHAIR_COMFORT_M = 2000;
+const WHEELCHAIR_MAX_M = 5000;
+
+type Verdict = {
+  label: string;
+  className: string;
+};
+
+function wheelchairVerdict(distanceMeters: number): Verdict {
+  if (distanceMeters <= WHEELCHAIR_COMFORT_M) {
+    return { label: 'Comfortable', className: 'bg-green-50 text-green-700' };
   }
+  if (distanceMeters <= WHEELCHAIR_MAX_M) {
+    return { label: 'Possible, tiring', className: 'bg-amber-50 text-amber-700' };
+  }
+  return { label: 'Too far', className: 'bg-red-50 text-red-700' };
+}
+
+function recommendedMode(wheelchairDistance: number | null): ModeKey {
+  if (wheelchairDistance === null) return 'vehicle';
+  return wheelchairDistance <= WHEELCHAIR_COMFORT_M ? 'wheelchair' : 'vehicle';
+}
+
+/* ------------------------------------------------------------------
+ * HELPERS
+ * ------------------------------------------------------------------ */
+
+function getInstructionText(step: OSRMStep): string {
+  const type = step.maneuver?.type;
+  const modifier = step.maneuver?.modifier;
+
+  if (type === 'depart') return 'Start route';
+  if (type === 'arrive') return 'Arrive at destination';
+  if (modifier === 'left') return 'Turn left';
+  if (modifier === 'right') return 'Turn right';
+  if (modifier === 'slight left') return 'Slight left';
+  if (modifier === 'slight right') return 'Slight right';
+  if (modifier === 'uturn') return 'Make a U-turn';
+  if (modifier === 'straight') return 'Continue straight';
+
+  return 'Continue on route';
+}
+
+function formatDistance(meters: number) {
+  if (!Number.isFinite(meters)) return '0 m';
 
   if (meters < 1000) {
     return `${Math.max(0, Math.round(meters))} m`;
   }
 
   return `${(meters / 1000).toFixed(1)} km`;
+}
+
+function calculateWheelchairDuration(distanceMeters: number): number {
+  if (!Number.isFinite(distanceMeters) || distanceMeters <= 0) return 0;
+  return distanceMeters / WHEELCHAIR_SPEED_MPS;
+}
+
+async function fetchOsrmRoute(
+  modeKey: ModeKey,
+  origin: RoutePoint,
+  destination: RoutePoint,
+): Promise<RouteData[]> {
+  const coords =
+    `${origin.lng},${origin.lat};${destination.lng},${destination.lat}`;
+
+  // Public OSRM = driving only. FOSSGIS foot server = footpaths/sidewalks.
+  const baseUrl =
+    modeKey === 'vehicle'
+      ? 'https://router.project-osrm.org/route/v1/driving/'
+      : 'https://routing.openstreetmap.de/routed-foot/route/v1/driving/';
+
+  const response = await fetch(
+    `${baseUrl}${coords}?overview=full&geometries=geojson&steps=true&alternatives=3`,
+  );
+
+  if (!response.ok) {
+    throw new Error(`Routing service returned ${response.status}`);
+  }
+
+  const data = (await response.json()) as RouteResponse;
+
+  if (data.code !== 'Ok' || !data.routes || data.routes.length === 0) {
+    throw new Error('No route was returned.');
+  }
+
+  return data.routes.slice(0, 3).map((route) => ({
+    coordinates: route.geometry.coordinates.map(
+      ([lng, lat]) => [lat, lng] as [number, number],
+    ),
+    distance: route.distance,
+    // Car: OSRM driving time. Wheelchair: our own speed-based estimate.
+    duration:
+      modeKey === 'vehicle'
+        ? route.duration
+        : calculateWheelchairDuration(route.distance),
+    steps: route.legs?.flatMap((leg) => leg.steps ?? []) ?? [],
+    source: 'OSRM' as const,
+  }));
+}
+
+function orsManeuver(type: number): { type: string; modifier?: string } {
+  switch (type) {
+    case 0: return { type: 'turn', modifier: 'left' };
+    case 1: return { type: 'turn', modifier: 'right' };
+    case 2: return { type: 'turn', modifier: 'sharp left' };
+    case 3: return { type: 'turn', modifier: 'sharp right' };
+    case 4: return { type: 'turn', modifier: 'slight left' };
+    case 5: return { type: 'turn', modifier: 'slight right' };
+    case 7:
+    case 8: return { type: 'roundabout' };
+    case 9: return { type: 'uturn', modifier: 'uturn' };
+    case 10: return { type: 'arrive' };
+    case 11: return { type: 'depart' };
+    case 12: return { type: 'fork', modifier: 'left' };
+    case 13: return { type: 'fork', modifier: 'right' };
+    default: return { type: 'continue', modifier: 'straight' };
+  }
+}
+
+interface ORSResponse {
+  features?: Array<{
+    geometry: { coordinates: [number, number][] };
+    properties: {
+      summary: { distance: number; duration: number };
+      segments?: Array<{ steps?: ORSStep[] }>;
+    };
+  }>;
+}
+
+async function fetchOrsRoute(
+  modeKey: ModeKey,
+  origin: RoutePoint,
+  destination: RoutePoint,
+): Promise<RouteData[]> {
+  const profile = modeKey === 'vehicle' ? 'driving-car' : 'wheelchair';
+
+  const request = (withAlternatives: boolean) =>
+    fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: ORS_API_KEY as string,
+      },
+      body: JSON.stringify({
+        coordinates: [
+          [origin.lng, origin.lat],
+          [destination.lng, destination.lat],
+        ],
+        instructions: true,
+        ...(withAlternatives
+          ? {
+              alternative_routes: {
+                target_count: 3,
+                share_factor: 0.6,
+                weight_factor: 1.6,
+              },
+            }
+          : {}),
+      }),
+    });
+
+  // Alternatives are only supported on shorter trips, so retry without.
+  let response = await request(true);
+
+  if (!response.ok) {
+    response = await request(false);
+  }
+
+  if (!response.ok) {
+    throw new Error(`OpenRouteService returned ${response.status}`);
+  }
+
+  const data = (await response.json()) as ORSResponse;
+
+  if (!data.features || data.features.length === 0) {
+    throw new Error('No route was returned.');
+  }
+
+  return data.features.slice(0, 3).map((feature) => {
+    const lngLat = feature.geometry.coordinates;
+
+    const steps: OSRMStep[] = (feature.properties.segments ?? [])
+      .flatMap((segment) => segment.steps ?? [])
+      .map((step) => {
+        const point = lngLat[step.way_points[0]];
+
+        return {
+          distance: step.distance,
+          duration: step.duration,
+          name: step.name && step.name !== '-' ? step.name : '',
+          maneuver: {
+            location: [point[0], point[1]] as [number, number],
+            ...orsManeuver(step.type),
+          },
+        };
+      });
+
+    return {
+      coordinates: lngLat.map(([lng, lat]) => [lat, lng] as [number, number]),
+      distance: feature.properties.summary.distance,
+      duration: feature.properties.summary.duration,
+      steps,
+      source: 'ORS' as const,
+    };
+  });
+}
+
+async function fetchRouteForMode(
+  modeKey: ModeKey,
+  origin: RoutePoint,
+  destination: RoutePoint,
+): Promise<RouteData[]> {
+  let list: RouteData[] | null = null;
+
+  if (ORS_API_KEY) {
+    try {
+      list = await fetchOrsRoute(modeKey, origin, destination);
+    } catch (err) {
+      console.warn('OpenRouteService failed, falling back to OSRM:', err);
+    }
+  }
+
+  if (!list) {
+    list = await fetchOsrmRoute(modeKey, origin, destination);
+  }
+
+  const result = list.map((route) =>
+    modeKey === 'vehicle'
+      ? { ...route, duration: route.duration * CAR_TRAFFIC_FACTOR }
+      : route,
+  );
+
+  // Fastest first.
+  return result.sort((x, y) => x.duration - y.duration);
+}
+
+function viaName(route: RouteData): string {
+  let best = '';
+  let bestDistance = 0;
+
+  for (const step of route.steps) {
+    if (step.name && step.name.trim() && step.distance > bestDistance) {
+      best = step.name;
+      bestDistance = step.distance;
+    }
+  }
+
+  return best;
 }
 
 function formatDuration(seconds: number) {
@@ -143,35 +392,22 @@ function formatDuration(seconds: number) {
   return `${hours} hr ${remaining} min`;
 }
 
-function haversineDistance(
-  first: RoutePoint,
-  second: RoutePoint,
-) {
+function haversineDistance(first: RoutePoint, second: RoutePoint) {
   const earthRadius = 6371000;
 
   const lat1 = (first.lat * Math.PI) / 180;
   const lat2 = (second.lat * Math.PI) / 180;
-
-  const deltaLat =
-    ((second.lat - first.lat) * Math.PI) / 180;
-
-  const deltaLng =
-    ((second.lng - first.lng) * Math.PI) / 180;
+  const deltaLat = ((second.lat - first.lat) * Math.PI) / 180;
+  const deltaLng = ((second.lng - first.lng) * Math.PI) / 180;
 
   const a =
-    Math.sin(deltaLat / 2) *
-      Math.sin(deltaLat / 2) +
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
     Math.cos(lat1) *
       Math.cos(lat2) *
       Math.sin(deltaLng / 2) *
       Math.sin(deltaLng / 2);
 
-  const c =
-    2 *
-    Math.atan2(
-      Math.sqrt(a),
-      Math.sqrt(1 - a),
-    );
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return earthRadius * c;
 }
@@ -187,13 +423,7 @@ function distanceToPolyline(
   let minimumDistance = Infinity;
 
   for (const [lat, lng] of coordinates) {
-    const distance = haversineDistance(
-      location,
-      {
-        lat,
-        lng,
-      },
-    );
+    const distance = haversineDistance(location, { lat, lng });
 
     if (distance < minimumDistance) {
       minimumDistance = distance;
@@ -203,129 +433,150 @@ function distanceToPolyline(
   return minimumDistance;
 }
 
-function createCurrentLocationIcon() {
+function createCurrentLocationIcon(heading: number | null) {
+  const arrow =
+    heading !== null
+      ? `<div style="position:absolute;left:50%;top:50%;width:0;height:0;transform:rotate(${heading}deg);">
+           <div style="position:absolute;left:-9px;top:-34px;border-left:9px solid transparent;border-right:9px solid transparent;border-bottom:16px solid #1a73e8;"></div>
+         </div>`
+      : '';
+
   return L.divIcon({
     className: '',
     html: `
-      <div
-        style="
-          width: 30px;
-          height: 30px;
-          border-radius: 9999px;
-          background: #0f766e;
-          border: 4px solid white;
-          box-shadow: 0 3px 12px rgba(0,0,0,0.3);
-        "
-      ></div>
+      <div style="position:relative;width:30px;height:30px;">
+        <div style="position:absolute;inset:-10px;border-radius:9999px;background:rgba(26,115,232,0.18);"></div>
+        ${arrow}
+        <div
+          style="
+            position: relative;
+            width: 30px;
+            height: 30px;
+            border-radius: 9999px;
+            background: #1a73e8;
+            border: 4px solid white;
+            box-shadow: 0 3px 12px rgba(0,0,0,0.35);
+          "
+        ></div>
+      </div>
     `,
     iconSize: [30, 30],
     iconAnchor: [15, 15],
   });
 }
 
+// Red map pin for the destination; the tip of the pin is the anchor.
 function createDestinationIcon() {
   return L.divIcon({
     className: '',
     html: `
-      <div
-        style="
-          width: 42px;
-          height: 42px;
-          border-radius: 9999px;
-          background: #2563eb;
-          border: 4px solid white;
-          box-shadow: 0 4px 14px rgba(0,0,0,0.3);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-          font-size: 18px;
-          font-weight: 800;
-        "
-      >
-        ●
-      </div>
+      <svg width="36" height="46" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg"
+           style="filter: drop-shadow(0 3px 4px rgba(0,0,0,0.35));">
+        <path d="M12 1C5.9 1 1 5.9 1 12c0 8.3 11 19 11 19s11-10.7 11-19C23 5.9 18.1 1 12 1z"
+              fill="#dc2626" stroke="#ffffff" stroke-width="2"/>
+        <circle cx="12" cy="12" r="4.5" fill="#ffffff"/>
+      </svg>
     `,
-    iconSize: [42, 42],
-    iconAnchor: [21, 21],
+    iconSize: [36, 46],
+    iconAnchor: [18, 45],
   });
 }
 
-
-
 function FollowRoute({
   currentLocation,
-  routeSteps,
-  currentStepIndex,
+  enabled,
+  onUserMove,
 }: {
   currentLocation: RoutePoint | null;
-  routeSteps: OSRMStep[];
-  currentStepIndex: number;
+  enabled: boolean;
+  onUserMove: () => void;
 }) {
   const map = useMap();
 
+  // Dragging the map stops auto-follow until "Recenter" is tapped.
+  useMapEvents({
+    dragstart: () => onUserMove(),
+  });
+
   useEffect(() => {
-    if (!currentLocation) {
+    if (!enabled || !currentLocation) {
       return;
     }
 
-    map.setView(
-      [
-        currentLocation.lat,
-        currentLocation.lng,
-      ],
-      17,
-      {
-        animate: true,
-        duration: 0.5,
-      },
-    );
-  }, [currentLocation, map]);
+    map.setView([currentLocation.lat, currentLocation.lng], 18, {
+      animate: true,
+      duration: 0.5,
+    });
+  }, [currentLocation, enabled, map]);
 
   return null;
 }
+
+function FitBounds({ bounds }: { bounds: L.LatLngBounds }) {
+  const map = useMap();
+
+  useEffect(() => {
+    map.fitBounds(bounds, {
+      paddingTopLeft: [30, 110],
+      paddingBottomRight: [30, 380],
+      animate: true,
+    });
+  }, [bounds, map]);
+
+  return null;
+}
+
+function RouteLabel({
+  position,
+  text,
+  selected,
+  color,
+  onClick,
+}: {
+  position: [number, number];
+  text: string;
+  selected: boolean;
+  color: string;
+  onClick: () => void;
+}) {
+  const icon = useMemo(
+    () =>
+      L.divIcon({
+        className: '',
+        html: `<div style="padding:4px 10px;border-radius:9999px;font:800 13px system-ui,sans-serif;white-space:nowrap;text-align:center;background:${
+          selected ? color : '#ffffff'
+        };color:${selected ? '#ffffff' : '#0f172a'};border:2px solid ${
+          selected ? '#ffffff' : '#94a3b8'
+        };box-shadow:0 2px 8px rgba(0,0,0,0.3);">${text}</div>`,
+        iconSize: [76, 30],
+        iconAnchor: [38, 15],
+      }),
+    [text, selected, color],
+  );
+
+  return (
+    <Marker
+      position={position}
+      icon={icon}
+      zIndexOffset={selected ? 1000 : 0}
+      eventHandlers={{ click: onClick }}
+    />
+  );
+}
+
 function maneuverSymbol(step: OSRMStep) {
   const type = step.maneuver.type;
   const modifier = step.maneuver.modifier;
 
-  if (type === 'arrive') {
-    return '✓';
-  }
-
-  if (
-    type === 'roundabout' ||
-    type === 'rotary'
-  ) {
-    return '↻';
-  }
-
-  if (type === 'uturn') {
-    return '↶';
-  }
-
-  if (modifier === 'left') {
-    return '←';
-  }
-
-  if (modifier === 'right') {
-    return '→';
-  }
-
-  if (modifier === 'slight left') {
-    return '↖';
-  }
-
-  if (modifier === 'slight right') {
-    return '↗';
-  }
-
-  if (modifier === 'sharp left') {
-    return '↙';
-  }
-
-  if (modifier === 'sharp right') {
-    return '↘';
-  }
+  if (type === 'arrive') return '✓';
+  if (type === 'roundabout' || type === 'rotary') return '↻';
+  if (type === 'uturn') return '↶';
+  if (modifier === 'left') return '←';
+  if (modifier === 'right') return '→';
+  if (modifier === 'slight left') return '↖';
+  if (modifier === 'slight right') return '↗';
+  if (modifier === 'sharp left') return '↙';
+  if (modifier === 'sharp right') return '↘';
 
   return '↑';
 }
@@ -339,25 +590,15 @@ function maneuverTitle(step: OSRMStep) {
   }
 
   if (type === 'depart') {
-    if (modifier === 'left') {
-      return 'Start by turning left';
-    }
-
-    if (modifier === 'right') {
-      return 'Start by turning right';
-    }
-
+    if (modifier === 'left') return 'Start by turning left';
+    if (modifier === 'right') return 'Start by turning right';
     return 'Start navigation';
   }
 
-  if (
-    type === 'roundabout' ||
-    type === 'rotary'
-  ) {
+  if (type === 'roundabout' || type === 'rotary') {
     if (step.maneuver.exit) {
       return `Take exit ${step.maneuver.exit}`;
     }
-
     return 'Continue through the roundabout';
   }
 
@@ -366,121 +607,60 @@ function maneuverTitle(step: OSRMStep) {
   }
 
   if (type === 'merge') {
-    if (modifier === 'left') {
-      return 'Merge left';
-    }
-
-    if (modifier === 'right') {
-      return 'Merge right';
-    }
-
+    if (modifier === 'left') return 'Merge left';
+    if (modifier === 'right') return 'Merge right';
     return 'Merge';
   }
 
   if (type === 'fork') {
-    if (modifier === 'left') {
-      return 'Keep left';
-    }
-
-    if (modifier === 'right') {
-      return 'Keep right';
-    }
-
+    if (modifier === 'left') return 'Keep left';
+    if (modifier === 'right') return 'Keep right';
     return 'Continue at the fork';
   }
 
   if (type === 'on ramp') {
-    if (modifier === 'left') {
-      return 'Take the left ramp';
-    }
-
-    if (modifier === 'right') {
-      return 'Take the right ramp';
-    }
-
+    if (modifier === 'left') return 'Take the left ramp';
+    if (modifier === 'right') return 'Take the right ramp';
     return 'Take the ramp';
   }
 
   if (type === 'off ramp') {
-    if (modifier === 'left') {
-      return 'Take the left exit ramp';
-    }
-
-    if (modifier === 'right') {
-      return 'Take the right exit ramp';
-    }
-
+    if (modifier === 'left') return 'Take the left exit ramp';
+    if (modifier === 'right') return 'Take the right exit ramp';
     return 'Take the exit ramp';
   }
 
   if (type === 'end of road') {
-    if (modifier === 'left') {
-      return 'Turn left at the end of the road';
-    }
-
-    if (modifier === 'right') {
-      return 'Turn right at the end of the road';
-    }
-
+    if (modifier === 'left') return 'Turn left at the end of the road';
+    if (modifier === 'right') return 'Turn right at the end of the road';
     return 'Continue at the end of the road';
   }
 
-  if (modifier === 'left') {
-    return 'Turn left';
-  }
-
-  if (modifier === 'right') {
-    return 'Turn right';
-  }
-
-  if (modifier === 'slight left') {
-    return 'Bear left';
-  }
-
-  if (modifier === 'slight right') {
-    return 'Bear right';
-  }
-
-  if (modifier === 'sharp left') {
-    return 'Turn sharply left';
-  }
-
-  if (modifier === 'sharp right') {
-    return 'Turn sharply right';
-  }
-
-  if (type === 'continue') {
-    return 'Continue straight';
-  }
-
-  if (type === 'new name') {
-    return 'Continue straight';
-  }
+  if (modifier === 'left') return 'Turn left';
+  if (modifier === 'right') return 'Turn right';
+  if (modifier === 'slight left') return 'Bear left';
+  if (modifier === 'slight right') return 'Bear right';
+  if (modifier === 'sharp left') return 'Turn sharply left';
+  if (modifier === 'sharp right') return 'Turn sharply right';
 
   return 'Continue straight';
 }
 
 function getStreetName(step: OSRMStep) {
-  if (
-    step.name &&
-    step.name.trim().length > 0
-  ) {
+  if (step.name && step.name.trim().length > 0) {
     return step.name;
   }
 
   return 'Unnamed road';
 }
 
-function findInitialStep(
-  steps: OSRMStep[],
-) {
+function findInitialStep(steps: OSRMStep[]) {
   if (steps.length === 0) {
     return -1;
   }
 
   const firstUsefulStep = steps.findIndex(
-    (step) =>
-      step.maneuver.type !== 'depart',
+    (step) => step.maneuver.type !== 'depart',
   );
 
   if (firstUsefulStep !== -1) {
@@ -498,98 +678,173 @@ function getDistanceMeters(
 ): number {
   const R = 6371000;
 
-  const dLat =
-    ((lat2 - lat1) * Math.PI) / 180;
-
-  const dLng =
-    ((lng2 - lng1) * Math.PI) / 180;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
 
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(
-      (lat1 * Math.PI) / 180,
-    ) *
-      Math.cos(
-        (lat2 * Math.PI) / 180,
-      ) *
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLng / 2) ** 2;
 
-  const c =
-    2 *
-    Math.atan2(
-      Math.sqrt(a),
-      Math.sqrt(1 - a),
-    );
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return R * c;
 }
+
+/* ------------------------------------------------------------------
+ * MAIN SCREEN
+ * ------------------------------------------------------------------ */
 
 export default function Navigation() {
   const {
     destination,
     mode,
+    travelMode,
+    setTravelMode,
     paused,
     setPaused,
-    selectedRoute,
     go,
   } = useApp();
 
   const [currentLocation, setCurrentLocation] =
-  useState<RoutePoint | null>(null);
+    useState<RoutePoint | null>(null);
 
-const [routeCoordinates, setRouteCoordinates] =
-  useState<[number, number][]>([]);
+  // Both routes are fetched up front so they can be compared.
+  const [routes, setRoutes] = useState<Record<ModeKey, RouteData[]>>({
+    vehicle: [],
+    wheelchair: [],
+  });
 
-const [routeDistance, setRouteDistance] =
-  useState(0);
+  // 'preview' = pick a route (like Google Maps), 'navigating' = turn by turn.
+  const [phase, setPhase] = useState<'preview' | 'navigating'>('preview');
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [following, setFollowing] = useState(true);
+  const [heading, setHeading] = useState<number | null>(null);
 
-const [routeDuration, setRouteDuration] =
-  useState(0);
+  const [currentStepIndex, setCurrentStepIndex] = useState(-1);
+  const [measuredSpeed, setMeasuredSpeed] = useState<number | null>(null);
+  const speedEmaRef = useRef<number | null>(null);
+  const [nextStepDistance, setNextStepDistance] = useState(0);
 
-const [routeSteps, setRouteSteps] =
-  useState<OSRMStep[]>([]);
-
-const [currentStepIndex, setCurrentStepIndex] =
-  useState(-1);
-
-    
-  const [nextStepDistance, setNextStepDistance] =
-    useState(0);
-
-
-  const [loadingLocation, setLoadingLocation] =
-    useState(true);
-
-  const [loadingRoute, setLoadingRoute] =
-    useState(true);
-
+  const [loadingLocation, setLoadingLocation] = useState(true);
+  const [loadingRoute, setLoadingRoute] = useState(true);
   const [error, setError] = useState('');
+  const [arrived, setArrived] = useState(false);
 
-  const [arrived, setArrived] =
-    useState(false);
-
-  const latestLocationRef =
-    useRef<RoutePoint | null>(null);
-
+  const latestLocationRef = useRef<RoutePoint | null>(null);
   const hasRouteRef = useRef(false);
+  const lastRerouteAtRef = useRef(0);
+  const requestIdRef = useRef(0);
 
-  const lastRerouteAtRef =
-    useRef(0);
+  const destinationPoint = useMemo<RoutePoint | null>(() => {
+    if (!destination) {
+      return null;
+    }
 
-  const requestIdRef =
-    useRef(0);
+    return {
+      lat: destination.lat,
+      lng: destination.lng,
+    };
+  }, [destination]);
 
-  const destinationPoint =
-    useMemo<RoutePoint | null>(() => {
-      if (!destination) {
-        return null;
+  // The old 'walking' option is gone: anything that isn't vehicle is wheelchair.
+  const activeMode: ModeKey = travelMode === 'vehicle' ? 'vehicle' : 'wheelchair';
+  const activeList = routes[activeMode];
+  const safeIdx = selectedIdx < activeList.length ? selectedIdx : 0;
+  const activeRoute: RouteData | null = activeList[safeIdx] ?? null;
+  const routeCoordinates = activeRoute?.coordinates ?? EMPTY_COORDS;
+  const routeSteps = activeRoute?.steps ?? EMPTY_STEPS;
+
+  // Fit the whole trip on screen in preview. Deliberately not tied to the
+  // live GPS position, so it does not re-fit (and fight panning) every fix.
+  const previewBounds = useMemo(() => {
+    const points: [number, number][] = [];
+
+    for (const route of activeList) {
+      for (const point of route.coordinates) {
+        points.push(point);
       }
+    }
 
-      return {
-        lat: destination.lat,
-        lng: destination.lng,
-      };
-    }, [destination]);
+    if (destinationPoint) {
+      points.push([destinationPoint.lat, destinationPoint.lng]);
+    }
+
+    return points.length > 1 ? L.latLngBounds(points) : null;
+  }, [activeList, destinationPoint]);
+
+  // Distance remaining along the route, from the nearest point to the end.
+  const remainingMeters = useMemo(() => {
+    if (!activeRoute || activeRoute.coordinates.length < 2) {
+      return null;
+    }
+
+    if (!currentLocation) {
+      return activeRoute.distance;
+    }
+
+    const c = activeRoute.coordinates;
+    const cumulative: number[] = [0];
+
+    for (let i = 1; i < c.length; i++) {
+      cumulative.push(
+        cumulative[i - 1] +
+          getDistanceMeters(c[i - 1][0], c[i - 1][1], c[i][0], c[i][1]),
+      );
+    }
+
+    let nearest = 0;
+    let nearestDistance = Infinity;
+
+    for (let i = 0; i < c.length; i++) {
+      const d = getDistanceMeters(
+        currentLocation.lat,
+        currentLocation.lng,
+        c[i][0],
+        c[i][1],
+      );
+
+      if (d < nearestDistance) {
+        nearestDistance = d;
+        nearest = i;
+      }
+    }
+
+    return cumulative[cumulative.length - 1] - cumulative[nearest] + nearestDistance;
+  }, [activeRoute, currentLocation]);
+
+  // Live ETA: route average speed, blended with real GPS speed when it
+  // is plausible for the chosen mode (so walking while "Car" is selected
+  // does not wreck the estimate).
+  const routeAverageSpeed =
+    activeRoute && activeRoute.duration > 0
+      ? activeRoute.distance / activeRoute.duration
+      : null;
+
+  const measuredSpeedIsUsable =
+    measuredSpeed !== null &&
+    (activeMode === 'vehicle' ? measuredSpeed >= 3 : measuredSpeed <= 3);
+
+  const effectiveSpeed =
+    routeAverageSpeed === null
+      ? null
+      : measuredSpeedIsUsable && measuredSpeed !== null
+        ? 0.6 * measuredSpeed + 0.4 * routeAverageSpeed
+        : routeAverageSpeed;
+
+  const remainingSeconds =
+    remainingMeters !== null && effectiveSpeed
+      ? remainingMeters / effectiveSpeed
+      : null;
+
+  const arrivalClock =
+    remainingSeconds !== null
+      ? new Date(Date.now() + remainingSeconds * 1000).toLocaleTimeString([], {
+          hour: 'numeric',
+          minute: '2-digit',
+        })
+      : null;
 
   /*
    * ------------------------------------------------------------
@@ -600,195 +855,118 @@ const [currentStepIndex, setCurrentStepIndex] =
   useEffect(() => {
     if (!navigator.geolocation) {
       setLoadingLocation(false);
-      setError(
-        'Your browser does not support location services.',
-      );
+      setError('Your browser does not support location services.');
       return;
     }
 
     setLoadingLocation(true);
     setError('');
 
-    const watchId =
-      navigator.geolocation.watchPosition(
-        (position) => {
-          const location: RoutePoint = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          };
-          console.log(
-            'GPS UPDATE:',
-            position.coords.latitude,
-            position.coords.longitude,
-            'accuracy:',
-            position.coords.accuracy,
-          );
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const location: RoutePoint = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
 
-          latestLocationRef.current =
-            location;
+        latestLocationRef.current = location;
 
-            setCurrentLocation(location);
+        // Smoothed real speed from GPS (m/s), used to refine the ETA.
+        const rawSpeed = position.coords.speed;
 
-            // Automatically update the current navigation step
-            if (routeSteps.length > 0) {
-              let closestStepIndex =
-                currentStepIndex;
-            
-              for (
-                let i = Math.max(0, currentStepIndex);
-                i < routeSteps.length;
-                i++
-              ) {
-                const step = routeSteps[i];
-            
-                const [
-                  stepLng,
-                  stepLat,
-                ] = step.maneuver.location;
-            
-                const distance =
-                  getDistanceMeters(
-                    location.lat,
-                    location.lng,
-                    stepLat,
-                    stepLng,
-                  );
-            
-                // When we are within 50 metres
-                // of the maneuver, move to it.
-                if (distance < 50) {
-                  closestStepIndex = i;
-                  break;
-                }
-              }
-            
-              if (
-                closestStepIndex !==
-                currentStepIndex
-              ) {
-                setCurrentStepIndex(
-                  closestStepIndex,
-                );
-              }
-            }
-            
-            setLoadingLocation(false);
-        },
-        (locationError) => {
-          console.error(
-            'Navigation location error:',
-            locationError,
-          );
-
-          setLoadingLocation(false);
-
-          if (
-            locationError.code ===
-            locationError.PERMISSION_DENIED
-          ) {
-            setError(
-              'Location permission was denied. Please allow location access in your browser.',
-            );
-          } else if (
-            locationError.code ===
-            locationError.POSITION_UNAVAILABLE
-          ) {
-            setError(
-              'Your current location could not be determined.',
-            );
-          } else if (
-            locationError.code ===
-            locationError.TIMEOUT
-          ) {
-            setError(
-              'Getting your current location timed out.',
-            );
-          } else {
-            setError(
-              'Unable to get your current location.',
-            );
-          }
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 5000,
-          maximumAge: 1000,
+        if (rawSpeed !== null && Number.isFinite(rawSpeed) && rawSpeed > 0.3) {
+          speedEmaRef.current =
+            speedEmaRef.current === null
+              ? rawSpeed
+              : 0.8 * speedEmaRef.current + 0.2 * rawSpeed;
+          setMeasuredSpeed(speedEmaRef.current);
         }
-      );
+
+        const rawHeading = position.coords.heading;
+
+        if (rawHeading !== null && Number.isFinite(rawHeading)) {
+          setHeading(rawHeading);
+        }
+
+        setCurrentLocation(location);
+        setLoadingLocation(false);
+      },
+      (locationError) => {
+        console.error('Navigation location error:', locationError);
+
+        setLoadingLocation(false);
+
+        if (locationError.code === locationError.PERMISSION_DENIED) {
+          setError(
+            'Location permission was denied. Please allow location access in your browser.',
+          );
+        } else if (
+          locationError.code === locationError.POSITION_UNAVAILABLE
+        ) {
+          setError('Your current location could not be determined.');
+        } else if (locationError.code === locationError.TIMEOUT) {
+          setError('Getting your current location timed out.');
+        } else {
+          setError('Unable to get your current location.');
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 5000,
+        maximumAge: 1000,
+      },
+    );
 
     return () => {
-      navigator.geolocation.clearWatch(
-        watchId,
-      );
+      navigator.geolocation.clearWatch(watchId);
     };
   }, []);
+
+  /*
+   * ------------------------------------------------------------
+   * AUTO-ADVANCE STEP (runs every second with fresh state)
+   * ------------------------------------------------------------
+   */
 
   useEffect(() => {
     if (routeSteps.length === 0) {
       return;
     }
-  
+
     const interval = window.setInterval(() => {
-      const location =
-        latestLocationRef.current;
-  
+      const location = latestLocationRef.current;
+
       if (!location) {
         return;
       }
-  
-      let closestStepIndex =
-        currentStepIndex >= 0
-          ? currentStepIndex
-          : 0;
-  
-      for (
-        let i = Math.max(
-          0,
-          closestStepIndex,
-        );
-        i < routeSteps.length;
-        i++
-      ) {
-        const step = routeSteps[i];
-  
-        const [
-          stepLng,
+
+      let closestStepIndex = currentStepIndex >= 0 ? currentStepIndex : 0;
+
+      for (let i = closestStepIndex; i < routeSteps.length; i++) {
+        const [stepLng, stepLat] = routeSteps[i].maneuver.location;
+
+        const distance = getDistanceMeters(
+          location.lat,
+          location.lng,
           stepLat,
-        ] = step.maneuver.location;
-  
-        const distance =
-          getDistanceMeters(
-            location.lat,
-            location.lng,
-            stepLat,
-            stepLng,
-          );
-  
+          stepLng,
+        );
+
         if (distance < 50) {
           closestStepIndex = i;
           break;
         }
       }
-  
-      if (
-        closestStepIndex !==
-        currentStepIndex
-      ) {
-        setCurrentStepIndex(
-          closestStepIndex,
-        );
+
+      if (closestStepIndex !== currentStepIndex) {
+        setCurrentStepIndex(closestStepIndex);
       }
     }, 1000);
-  
+
     return () => {
-      window.clearInterval(
-        interval,
-      );
+      window.clearInterval(interval);
     };
-  }, [
-    routeSteps,
-    currentStepIndex,
-  ]);
+  }, [routeSteps, currentStepIndex]);
 
   /*
    * ------------------------------------------------------------
@@ -799,8 +977,10 @@ const [currentStepIndex, setCurrentStepIndex] =
   useEffect(() => {
     hasRouteRef.current = false;
 
-    setRouteCoordinates([]);
-    setRouteSteps([]);
+    setRoutes({ vehicle: [], wheelchair: [] });
+    setPhase('preview');
+    setSelectedIdx(0);
+    setFollowing(true);
     setCurrentStepIndex(-1);
     setNextStepDistance(0);
     setArrived(false);
@@ -809,25 +989,25 @@ const [currentStepIndex, setCurrentStepIndex] =
 
   /*
    * ------------------------------------------------------------
-   * OSRM TURN-BY-TURN ROUTE
+   * FETCH CAR + WHEELCHAIR ROUTES
    * ------------------------------------------------------------
    *
-   * Important:
-   * `steps=true` makes OSRM return actual maneuvers.
-   * This gives us left/right/straight/roundabout data.
+   * Neither OSRM server has real wheelchair data (kerbs, slopes,
+   * surfaces), so the wheelchair route is a footpath route plus
+   * a feasibility check based on distance.
    */
 
-  const fetchRoute = useCallback(
+  const fetchRoutes = useCallback(
     async (
       origin: RoutePoint,
       showError = true,
+      modes: ModeKey[] = ['vehicle', 'wheelchair'],
     ) => {
       if (!destinationPoint) {
         return;
       }
 
-      const requestId =
-        ++requestIdRef.current;
+      const requestId = ++requestIdRef.current;
 
       try {
         setLoadingRoute(true);
@@ -836,117 +1016,48 @@ const [currentStepIndex, setCurrentStepIndex] =
           setError('');
         }
 
-        const url =
-          `https://router.project-osrm.org/route/v1/driving/` +
-          `${origin.lng},${origin.lat};` +
-          `${destinationPoint.lng},${destinationPoint.lat}` +
-          `?overview=full&geometries=geojson&steps=true`;
+        const results = await Promise.allSettled(
+          modes.map((m) => fetchRouteForMode(m, origin, destinationPoint)),
+        );
 
-        const response = await fetch(url);
-
-        if (!response.ok) {
-          throw new Error(
-            `Routing service returned ${response.status}`,
-          );
-        }
-
-        const data =
-          (await response.json()) as RouteResponse;
-
-        if (
-          data.code !== 'Ok' ||
-          !data.routes ||
-          data.routes.length === 0
-        ) {
-          throw new Error(
-            'No route was returned.',
-          );
-        }
-
-        if (
-          requestId !== requestIdRef.current
-        ) {
+        if (requestId !== requestIdRef.current) {
           return;
         }
 
-        const route = data.routes[0];
+        const anySucceeded = results.some((r) => r.status === 'fulfilled');
 
-        const coordinates =
-          route.geometry.coordinates.map(
-            ([lng, lat]) =>
-              [lat, lng] as [
-                number,
-                number,
-              ],
-          );
-
-        const steps =
-          route.legs?.flatMap(
-            (leg) => leg.steps ?? [],
-          ) ?? [];
-
-        setRouteCoordinates(coordinates);
-        setRouteDistance(route.distance);
-        setRouteDuration(route.duration);
-        setRouteSteps(steps);
-
-        const initialStepIndex =
-          findInitialStep(steps);
-
-        setCurrentStepIndex(
-          initialStepIndex,
-        );
-
-        if (
-          initialStepIndex >= 0 &&
-          origin
-        ) {
-          const maneuver =
-            steps[initialStepIndex]
-              ?.maneuver?.location;
-
-          if (maneuver) {
-            setNextStepDistance(
-              haversineDistance(
-                origin,
-                {
-                  lat: maneuver[1],
-                  lng: maneuver[0],
-                },
-              ),
-            );
-          }
+        if (!anySucceeded) {
+          throw new Error('No route was returned.');
         }
 
-        const directDistance =
-          haversineDistance(
-            origin,
-            destinationPoint,
-          );
+        setRoutes((prev) => {
+          const next = { ...prev };
 
-        setArrived(
-          directDistance <= 30 ||
-            route.distance <= 30,
-        );
+          modes.forEach((m, i) => {
+            const result = results[i];
+
+            // Keep the previous route if a refresh fails.
+            if (result.status === 'fulfilled' && result.value.length > 0) {
+              next[m] = result.value;
+            }
+          });
+
+          return next;
+        });
+
+        setSelectedIdx(0);
+        setArrived(haversineDistance(origin, destinationPoint) <= 30);
 
         hasRouteRef.current = true;
-        lastRerouteAtRef.current =
-          Date.now();
+        lastRerouteAtRef.current = Date.now();
       } catch (err) {
-        console.error(
-          'Navigation route error:',
-          err,
-        );
+        console.error('Navigation route error:', err);
 
         if (showError) {
-          setError(
-            'Unable to calculate the navigation route.',
-          );
+          setError('Unable to calculate the navigation route.');
         }
       } finally {
-        if (
-          requestId === requestIdRef.current
-        ) {
+        if (requestId === requestIdRef.current) {
           setLoadingRoute(false);
         }
       }
@@ -956,28 +1067,43 @@ const [currentStepIndex, setCurrentStepIndex] =
 
   /*
    * ------------------------------------------------------------
+   * WHEN THE ACTIVE ROUTE CHANGES (new route or mode switch),
+   * RESTART THE STEP LIST
+   * ------------------------------------------------------------
+   */
+
+  useEffect(() => {
+    if (!activeRoute) {
+      setCurrentStepIndex(-1);
+      return;
+    }
+
+    const initialIndex = findInitialStep(activeRoute.steps);
+    setCurrentStepIndex(initialIndex);
+
+    const maneuver = activeRoute.steps[initialIndex]?.maneuver?.location;
+    const origin = latestLocationRef.current;
+
+    if (maneuver && origin) {
+      setNextStepDistance(
+        haversineDistance(origin, { lat: maneuver[1], lng: maneuver[0] }),
+      );
+    }
+  }, [activeRoute]);
+
+  /*
+   * ------------------------------------------------------------
    * INITIAL ROUTE
    * ------------------------------------------------------------
    */
 
   useEffect(() => {
-    if (
-      !currentLocation ||
-      !destinationPoint ||
-      hasRouteRef.current
-    ) {
+    if (!currentLocation || !destinationPoint || hasRouteRef.current) {
       return;
     }
 
-    fetchRoute(
-      currentLocation,
-      true,
-    );
-  }, [
-    currentLocation,
-    destinationPoint,
-    fetchRoute,
-  ]);
+    fetchRoutes(currentLocation, true);
+  }, [currentLocation, destinationPoint, fetchRoutes]);
 
   /*
    * ------------------------------------------------------------
@@ -1002,28 +1128,18 @@ const [currentStepIndex, setCurrentStepIndex] =
      * If the current maneuver is close enough,
      * advance to the next maneuver.
      */
-    while (
-      stepIndex >= 0 &&
-      stepIndex < routeSteps.length
-    ) {
-      const step =
-        routeSteps[stepIndex];
-
-      const maneuverLocation =
-        step.maneuver?.location;
+    while (stepIndex >= 0 && stepIndex < routeSteps.length) {
+      const step = routeSteps[stepIndex];
+      const maneuverLocation = step.maneuver?.location;
 
       if (!maneuverLocation) {
         break;
       }
 
-      const distance =
-        haversineDistance(
-          currentLocation,
-          {
-            lat: maneuverLocation[1],
-            lng: maneuverLocation[0],
-          },
-        );
+      const distance = haversineDistance(currentLocation, {
+        lat: maneuverLocation[1],
+        lng: maneuverLocation[0],
+      });
 
       setNextStepDistance(distance);
 
@@ -1031,19 +1147,14 @@ const [currentStepIndex, setCurrentStepIndex] =
         break;
       }
 
-      if (
-        step.maneuver.type === 'arrive'
-      ) {
+      if (step.maneuver.type === 'arrive') {
         setArrived(true);
         break;
       }
 
-      const nextIndex =
-        stepIndex + 1;
+      const nextIndex = stepIndex + 1;
 
-      if (
-        nextIndex >= routeSteps.length
-      ) {
+      if (nextIndex >= routeSteps.length) {
         setArrived(true);
         break;
       }
@@ -1052,14 +1163,15 @@ const [currentStepIndex, setCurrentStepIndex] =
       setCurrentStepIndex(stepIndex);
     }
 
-    const destinationDistance =
-      haversineDistance(
+    if (destinationPoint) {
+      const destinationDistance = haversineDistance(
         currentLocation,
-        destinationPoint!,
+        destinationPoint,
       );
 
-    if (destinationDistance <= 30) {
-      setArrived(true);
+      if (destinationDistance <= 30) {
+        setArrived(true);
+      }
     }
   }, [
     currentLocation,
@@ -1081,6 +1193,7 @@ const [currentStepIndex, setCurrentStepIndex] =
 
   useEffect(() => {
     if (
+      phase !== 'navigating' ||
       paused ||
       arrived ||
       !currentLocation ||
@@ -1090,11 +1203,10 @@ const [currentStepIndex, setCurrentStepIndex] =
       return;
     }
 
-    const distanceFromRoute =
-      distanceToPolyline(
-        currentLocation,
-        routeCoordinates,
-      );
+    const distanceFromRoute = distanceToPolyline(
+      currentLocation,
+      routeCoordinates,
+    );
 
     if (distanceFromRoute <= 75) {
       return;
@@ -1102,27 +1214,23 @@ const [currentStepIndex, setCurrentStepIndex] =
 
     const now = Date.now();
 
-    if (
-      now - lastRerouteAtRef.current <
-      15000
-    ) {
+    if (now - lastRerouteAtRef.current < 15000) {
       return;
     }
 
     lastRerouteAtRef.current = now;
     hasRouteRef.current = false;
 
-    fetchRoute(
-      currentLocation,
-      false,
-    );
+    fetchRoutes(currentLocation, false, [activeMode]);
   }, [
     currentLocation,
     routeCoordinates,
     paused,
     arrived,
     destinationPoint,
-    fetchRoute,
+    fetchRoutes,
+    activeMode,
+    phase,
   ]);
 
   /*
@@ -1132,23 +1240,16 @@ const [currentStepIndex, setCurrentStepIndex] =
    */
 
   const recalculate = () => {
-    const location =
-      latestLocationRef.current;
+    const location = latestLocationRef.current;
 
-    if (
-      !location ||
-      !destinationPoint
-    ) {
+    if (!location || !destinationPoint) {
       return;
     }
 
     hasRouteRef.current = false;
     setError('');
 
-    fetchRoute(
-      location,
-      true,
-    );
+    fetchRoutes(location, true);
   };
 
   /*
@@ -1165,25 +1266,18 @@ const [currentStepIndex, setCurrentStepIndex] =
     return (
       <div className="flex h-full w-full items-center justify-center bg-slate-100 px-6">
         <div className="w-full rounded-3xl bg-white p-6 text-center shadow-card">
-          <AlertTriangle
-            size={30}
-            className="mx-auto text-danger-500"
-          />
+          <AlertTriangle size={30} className="mx-auto text-danger-500" />
 
           <h2 className="mt-3 text-xl font-extrabold text-slate-900">
             Destination unavailable
           </h2>
 
           <p className="mt-2 text-sm text-slate-500">
-            The selected destination does not
-            contain valid coordinates.
+            The selected destination does not contain valid coordinates.
           </p>
 
           <div className="mt-5">
-            <Button
-              fullWidth
-              onClick={() => go('home')}
-            >
+            <Button fullWidth onClick={() => go('home')}>
               Go Home
             </Button>
           </div>
@@ -1198,19 +1292,12 @@ const [currentStepIndex, setCurrentStepIndex] =
    * ------------------------------------------------------------
    */
 
-  if (
-    loadingLocation ||
-    (loadingRoute &&
-      routeCoordinates.length === 0)
-  ) {
+  if (loadingLocation || (loadingRoute && routes.vehicle.length === 0 && routes.wheelchair.length === 0)) {
     return (
       <div className="relative h-full w-full overflow-hidden bg-slate-100">
         <div className="absolute inset-0">
           <MapContainer
-            center={[
-              destinationPoint.lat,
-              destinationPoint.lng,
-            ]}
+            center={[destinationPoint.lat, destinationPoint.lng]}
             zoom={14}
             zoomControl={false}
             className="h-full w-full"
@@ -1221,10 +1308,7 @@ const [currentStepIndex, setCurrentStepIndex] =
             />
 
             <Marker
-              position={[
-                destinationPoint.lat,
-                destinationPoint.lng,
-              ]}
+              position={[destinationPoint.lat, destinationPoint.lng]}
               icon={createDestinationIcon()}
             />
           </MapContainer>
@@ -1263,10 +1347,7 @@ const [currentStepIndex, setCurrentStepIndex] =
         <div className="w-full rounded-3xl bg-white p-6 text-center shadow-card">
           <div className="mb-4 flex justify-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-full bg-red-50">
-              <AlertTriangle
-                size={26}
-                className="text-red-500"
-              />
+              <AlertTriangle size={26} className="text-red-500" />
             </div>
           </div>
 
@@ -1274,15 +1355,10 @@ const [currentStepIndex, setCurrentStepIndex] =
             Navigation unavailable
           </h2>
 
-          <p className="mt-2 text-sm text-slate-500">
-            {error}
-          </p>
+          <p className="mt-2 text-sm text-slate-500">{error}</p>
 
           <div className="mt-5 space-y-2">
-            <Button
-              fullWidth
-              onClick={recalculate}
-            >
+            <Button fullWidth onClick={recalculate}>
               <RefreshCw size={18} />
               Try Again
             </Button>
@@ -1300,34 +1376,44 @@ const [currentStepIndex, setCurrentStepIndex] =
     );
   }
 
-  const currentStep =
-  currentStepIndex >= 0
-    ? routeSteps[currentStepIndex]
-    : null;
+  /*
+   * ------------------------------------------------------------
+   * DERIVED DISPLAY VALUES
+   * ------------------------------------------------------------
+   */
 
-const nextStep =
-  currentStepIndex >= 0
-    ? routeSteps[currentStepIndex + 1] ?? null
-    : null;
+  const currentStep = currentStepIndex >= 0 ? routeSteps[currentStepIndex] : null;
 
-  const instructionTitle =
-    arrived
-      ? 'You have arrived'
-      : currentStep
-        ? maneuverTitle(currentStep)
-        : 'Continue straight';
+  const instructionTitle = arrived
+    ? 'You have arrived'
+    : currentStep
+      ? maneuverTitle(currentStep)
+      : 'Continue straight';
 
-  const instructionStreet =
-    arrived
-      ? destination.name
-      : currentStep
-        ? getStreetName(currentStep)
-        : destination.name;
+  const instructionStreet = arrived
+    ? destination.name
+    : currentStep
+      ? getStreetName(currentStep)
+      : destination.name;
 
-  const instructionDistance =
-    arrived
-      ? 0
-      : nextStepDistance;
+  const instructionDistance = arrived ? 0 : nextStepDistance;
+
+  const isPreview = phase === 'preview';
+  const routeColor = activeMode === 'vehicle' ? '#2563eb' : '#16a34a';
+
+  const wheelchairDistance = routes.wheelchair[0]?.distance ?? null;
+  const recommended = recommendedMode(wheelchairDistance);
+
+  const fastestIdx = activeList.reduce(
+    (best, route, i, all) => (route.duration < all[best].duration ? i : best),
+    0,
+  );
+  const shortestIdx = activeList.reduce(
+    (best, route, i, all) => (route.distance < all[best].distance ? i : best),
+    0,
+  );
+
+  const labelFractions = [0.5, 0.35, 0.65];
 
   return (
     <div className="screen-enter relative h-full w-full overflow-hidden bg-slate-100">
@@ -1335,83 +1421,96 @@ const nextStep =
           MAP
       ====================================================== */}
 
-<div className="absolute inset-0">
-  <MapContainer
-    center={[
-      currentLocation?.lat ??
-        destinationPoint.lat,
-      currentLocation?.lng ??
-        destinationPoint.lng,
-    ]}
-    zoom={17}
-    zoomControl={false}
-    className="h-full w-full"
-  >
-    <FollowRoute
-  currentLocation={currentLocation}
-  routeSteps={routeSteps}
-  currentStepIndex={currentStepIndex}
-/>
-    
+      <div className="absolute inset-0">
+        <MapContainer
+          center={[
+            currentLocation?.lat ?? destinationPoint.lat,
+            currentLocation?.lng ?? destinationPoint.lng,
+          ]}
+          zoom={17}
+          zoomControl={false}
+          className="h-full w-full"
+        >
+          <FollowRoute
+            currentLocation={currentLocation}
+            enabled={!isPreview && following}
+            onUserMove={() => setFollowing(false)}
+          />
 
-    <TileLayer
-      attribution="&copy; OpenStreetMap contributors"
-      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-    />
+          {isPreview && previewBounds && <FitBounds bounds={previewBounds} />}
 
-   
-  {currentLocation && (
-    <Marker
-      position={[
-        currentLocation.lat,
-        currentLocation.lng,
-      ]}
-      icon={createCurrentLocationIcon()}
-    />
-  )}
-          
+          <TileLayer
+            attribution="&copy; OpenStreetMap contributors"
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+
+          {currentLocation && (
+            <Marker
+              position={[currentLocation.lat, currentLocation.lng]}
+              icon={createCurrentLocationIcon(heading)}
+            />
+          )}
 
           <Marker
-            position={[
-              destinationPoint.lat,
-              destinationPoint.lng,
-            ]}
+            position={[destinationPoint.lat, destinationPoint.lng]}
             icon={createDestinationIcon()}
           />
 
+          {/* Alternative routes: grey, tap to select (preview only) */}
+          {isPreview &&
+            activeList.map((route, i) =>
+              i === safeIdx || route.coordinates.length < 2 ? null : (
+                <Polyline
+                  key={`alt-${activeMode}-${i}`}
+                  positions={route.coordinates}
+                  pathOptions={{ color: '#94a3b8', weight: 7, opacity: 0.95 }}
+                  eventHandlers={{ click: () => setSelectedIdx(i) }}
+                />
+              ),
+            )}
+
+          {/* Selected route */}
           {routeCoordinates.length > 1 && (
             <>
               <Polyline
                 positions={routeCoordinates}
-                pathOptions={{
-                  color: '#ffffff',
-                  weight: 10,
-                  opacity: 0.9,
-                }}
+                pathOptions={{ color: '#ffffff', weight: 11, opacity: 0.95 }}
               />
 
               <Polyline
                 positions={routeCoordinates}
-                pathOptions={{
-                  color:
-                    selectedRoute ===
-                    'accessible'
-                      ? '#16a34a'
-                      : selectedRoute ===
-                          'fastest'
-                        ? '#2563eb'
-                        : '#f59e0b',
-                  weight: 6,
-                  opacity: 0.95,
-                }}
+                pathOptions={{ color: routeColor, weight: 7, opacity: 1 }}
               />
             </>
           )}
 
-          
+          {/* Time labels on each route line (preview only) */}
+          {isPreview &&
+            activeList.map((route, i) => {
+              if (route.coordinates.length < 2) return null;
 
-          
-          
+              const at =
+                route.coordinates[
+                  Math.min(
+                    route.coordinates.length - 1,
+                    Math.floor(
+                      route.coordinates.length *
+                        (labelFractions[i] ?? 0.5),
+                    ),
+                  )
+                ];
+
+              return (
+                <RouteLabel
+                  key={`label-${activeMode}-${i}`}
+                  position={at}
+                  text={formatDuration(route.duration)}
+                  selected={i === safeIdx}
+                  color={routeColor}
+                  onClick={() => setSelectedIdx(i)}
+                />
+              );
+            })}
         </MapContainer>
       </div>
 
@@ -1422,14 +1521,12 @@ const nextStep =
       <div className="absolute inset-x-0 top-0 z-20 px-4 pt-4">
         <div className="flex items-center gap-2 rounded-2xl bg-white/95 px-4 py-3 shadow-card backdrop-blur">
           <span className="text-lg">
-            {destination.place
-              ? destination.place.emoji
-              : '📍'}
+            {destination.place ? destination.place.emoji : '📍'}
           </span>
 
           <div className="min-w-0 flex-1">
             <p className="text-xs text-slate-400">
-              Navigating to
+              {isPreview ? 'Route to' : 'Navigating to'}
             </p>
 
             <p className="truncate text-sm font-bold text-slate-900">
@@ -1454,19 +1551,11 @@ const nextStep =
 
       <div className="absolute left-4 top-20 z-20 rounded-2xl bg-white/95 px-3 py-2 shadow-card backdrop-blur">
         <div className="flex items-center gap-2">
-          <LocateFixed
-            size={16}
-            className="text-accessible-600"
-          />
+          <LocateFixed size={16} className="text-accessible-600" />
 
           <div>
-            <p className="text-xs font-bold text-slate-800">
-              GPS active
-            </p>
-
-            <p className="text-[10px] text-slate-500">
-              Live location
-            </p>
+            <p className="text-xs font-bold text-slate-800">GPS active</p>
+            <p className="text-[10px] text-slate-500">Live location</p>
           </div>
         </div>
       </div>
@@ -1480,287 +1569,383 @@ const nextStep =
       </div>
 
       {/* ======================================================
-          NEXT TURN CARD
+          NEXT TURN CARD (navigating only)
       ====================================================== */}
 
-      <div className="absolute inset-x-4 top-36 z-20">
-        <div className="rounded-3xl bg-white p-4 shadow-sheet">
-          <div className="flex items-center gap-4">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-primary-600 text-4xl font-black text-white">
-              {arrived
-                ? '✓'
-                : currentStep
-                  ? maneuverSymbol(
-                      currentStep,
-                    )
-                  : '↑'}
-            </div>
+      {!isPreview && (
+        <div className="absolute inset-x-4 top-36 z-20">
+          <div className="rounded-3xl bg-white p-4 shadow-sheet">
+            <div className="flex items-center gap-4">
+              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-primary-600 text-4xl font-black text-white">
+                {arrived ? '✓' : currentStep ? maneuverSymbol(currentStep) : '↑'}
+              </div>
 
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold uppercase tracking-wide text-primary-600">
-                {arrived
-                  ? 'Destination'
-                  : 'Next instruction'}
-              </p>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold uppercase tracking-wide text-primary-600">
+                  {arrived ? 'Destination' : 'Next instruction'}
+                </p>
 
-              <p className="mt-0.5 text-xl font-extrabold leading-tight text-slate-900">
-                {instructionTitle}
-              </p>
+                <p className="mt-0.5 text-xl font-extrabold leading-tight text-slate-900">
+                  {instructionTitle}
+                </p>
+
+                {!arrived && (
+                  <p className="mt-1 truncate text-sm font-semibold text-slate-500">
+                    {instructionStreet}
+                  </p>
+                )}
+              </div>
 
               {!arrived && (
-                <p className="mt-1 truncate text-sm font-semibold text-slate-500">
-                  {instructionStreet}
-                </p>
+                <div className="shrink-0 text-right">
+                  <p className="text-2xl font-black text-slate-900">
+                    {formatDistance(instructionDistance)}
+                  </p>
+
+                  <p className="text-[10px] font-bold uppercase text-slate-400">
+                    from turn
+                  </p>
+                </div>
               )}
             </div>
 
-            {!arrived && (
-              <div className="shrink-0 text-right">
-                <p className="text-2xl font-black text-slate-900">
-                  {formatDistance(
-                    instructionDistance,
-                  )}
-                </p>
+            {!arrived && remainingSeconds !== null && (
+              <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                <span className="text-sm font-extrabold text-slate-900">
+                  {formatDuration(remainingSeconds)} left ·{' '}
+                  {formatDistance(remainingMeters ?? 0)}
+                </span>
 
-                <p className="text-[10px] font-bold uppercase text-slate-400">
-                  from turn
-                </p>
+                <span className="text-sm font-semibold text-slate-500">
+                  Arrive {arrivalClock}
+                </span>
               </div>
             )}
-          </div>
 
-          {loadingRoute &&
-            routeCoordinates.length > 0 && (
+            {loadingRoute && routeCoordinates.length > 0 && (
               <div className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-center text-xs font-semibold text-blue-700">
                 Recalculating route...
               </div>
             )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ======================================================
-          BOTTOM NAVIGATION CARD
+          BOTTOM SHEET
       ====================================================== */}
 
-      <div className="absolute inset-x-0 bottom-0 z-30 rounded-t-3xl bg-white p-5 pb-6 shadow-sheet">
-        <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-slate-200" />
-
-        {/* ROUTE SUMMARY */}
-
-        <div className="mb-4 grid grid-cols-3 gap-2">
-          <div className="rounded-2xl bg-slate-50 p-3 text-center">
-            <p className="text-[10px] font-semibold uppercase text-slate-400">
-              Distance
-            </p>
-
-            <p className="mt-1 text-sm font-extrabold text-slate-900">
-              {formatDistance(
-                routeDistance,
-              )}
-            </p>
-          </div>
-
-          <div className="rounded-2xl bg-slate-50 p-3 text-center">
-            <p className="text-[10px] font-semibold uppercase text-slate-400">
-              ETA
-            </p>
-
-            <p className="mt-1 text-sm font-extrabold text-slate-900">
-              {formatDuration(
-                routeDuration,
-              )}
-            </p>
-          </div>
-
-          <div className="rounded-2xl bg-accessible-50 p-3 text-center">
-            <p className="text-[10px] font-semibold uppercase text-accessible-600">
-              Mode
-            </p>
-
-            <p className="mt-1 text-sm font-extrabold text-accessible-700">
-              {mode === 'wheelchair'
-                ? '♿'
-                : '👁'}{' '}
-              {mode === 'wheelchair'
-                ? 'Wheelchair'
-                : 'Low Vision'}
-            </p>
-          </div>
-        </div>
-
-        {/* CURRENT NAVIGATION */}
-
-        <div className="flex items-start gap-3">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-600 text-white">
-            <NavigationIcon
-              size={24}
-            />
-          </div>
-
-          <div className="min-w-0 flex-1">
-          <p className="text-lg font-extrabold text-slate-900">
-  {currentStep
-    ? getInstructionText(currentStep)
-    : instructionTitle}
-</p>
-
-            <p className="text-sm text-slate-500">
-              {arrived
-                ? `You are at or very close to ${destination.name}.`
-                : currentStep
-                  ? `${formatDistance(
-                      instructionDistance,
-                    )} until the next maneuver.`
-                  : 'Your position is being updated using GPS.'}
-            </p>
-          </div>
-        </div>
-
-        {currentStep && (
-  <button
-    type="button"
-    onClick={() => {
-      if (
-        currentStepIndex <
-        routeSteps.length - 1
-      ) {
-        const nextIndex =
-          currentStepIndex + 1;
-    
-        setCurrentStepIndex(
-          nextIndex,
-        );
-    
-        
-      }
-    }}
-    disabled={
-      currentStepIndex >=
-      routeSteps.length - 1
-    }
-    className="mt-4 w-full rounded-2xl bg-primary-600 px-4 py-3.5 text-sm font-extrabold text-white shadow-sm disabled:opacity-50"
-  >
-    {currentStepIndex <
-    routeSteps.length - 1
-      ? 'Next step →'
-      : 'Final step'}
-  </button>
-)}
-
-        {/* ACCESSIBILITY STATUS */}
-
-        <div className="mt-3 flex items-center gap-3 rounded-2xl bg-accessible-50 p-3">
-          <span className="text-xl">
-            {mode === 'wheelchair'
-              ? '♿'
-              : '👁'}
-          </span>
-
-          <p className="flex-1 text-sm font-semibold text-accessible-800">
-            {mode === 'wheelchair'
-              ? 'Wheelchair mode is active. Accessibility information will be used to identify potential obstacles and accessible features for this destination.'
-              : 'Low-vision mode is active. Use the high-contrast map and voice guidance features where available.'}
-          </p>
-        </div>
-
-        {/* ACTION BUTTONS */}
-
-        <div className="mt-4 grid grid-cols-4 gap-2">
-          <NavAction
-            icon={
-              paused ? (
-                <Play size={18} />
-              ) : (
-                <Pause size={18} />
-              )
-            }
-            label={
-              paused
-                ? 'Resume'
-                : 'Pause'
-            }
-            onClick={() =>
-              setPaused(!paused)
-            }
-          />
-
-          <NavAction
-            icon={
-              <RefreshCw size={18} />
-            }
-            label="Recalc"
-            onClick={
-              recalculate
-            }
-          />
-
-          <NavAction
-            icon={
-              <FileText size={18} />
-            }
-            label="Details"
-            onClick={() =>
-              go('details')
-            }
-          />
-
-          <NavAction
-            icon={
-              <AlertTriangle
-                size={18}
-              />
-            }
-            label="Report"
-            onClick={() =>
-              go('report')
-            }
-          />
-        </div>
-
-        {/* PAUSED */}
-
-        {paused && (
-          <div className="mt-3 rounded-2xl bg-primary-50 px-4 py-3 text-center">
-            <p className="text-sm font-bold text-primary-700">
-              Navigation paused
-            </p>
-
-            <p className="mt-1 text-xs text-primary-600">
-              GPS tracking remains active.
-            </p>
-          </div>
+      <div className="absolute inset-x-0 bottom-0 z-30 flex max-h-[60%] flex-col">
+        {/* Recenter (after the user drags the map while navigating) */}
+        {!isPreview && !following && (
+          <button
+            type="button"
+            onClick={() => setFollowing(true)}
+            className="absolute -top-14 right-4 flex items-center gap-2 rounded-full bg-white px-4 py-3 text-sm font-extrabold text-primary-700 shadow-sheet"
+          >
+            <LocateFixed size={18} />
+            Recenter
+          </button>
         )}
 
-        {/* ARRIVED */}
+        <div className="overflow-y-auto rounded-t-3xl bg-white p-5 pb-6 shadow-sheet">
+          <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-slate-200" />
 
-        {arrived && (
-          <div className="mt-3 flex items-center justify-center gap-2 rounded-2xl bg-accessible-50 py-3 text-sm font-bold text-accessible-700">
-            <Check
-              size={16}
-              strokeWidth={3}
-            />
+          {isPreview ? (
+            <>
+              {/* MODE: CAR vs WHEELCHAIR */}
 
-            You have arrived
-          </div>
-        )}
+              <p className="mb-2 text-sm font-bold text-slate-800">
+                Choose how to travel
+              </p>
+
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    { value: 'vehicle', label: 'Car / taxi', icon: '🚗' },
+                    { value: 'wheelchair', label: 'Wheelchair', icon: '♿' },
+                  ] as const
+                ).map((option) => {
+                  const selected = activeMode === option.value;
+                  const route =
+                    routes[option.value][selected ? safeIdx : 0] ?? null;
+                  const verdict =
+                    option.value === 'wheelchair' && route
+                      ? wheelchairVerdict(route.distance)
+                      : null;
+
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        setTravelMode(option.value);
+                        setSelectedIdx(0);
+                      }}
+                      aria-pressed={selected}
+                      className={`rounded-2xl border-2 p-3 text-left ${
+                        selected
+                          ? 'border-primary-600 bg-primary-50'
+                          : 'border-slate-200 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-extrabold text-slate-900">
+                          {option.icon} {option.label}
+                        </span>
+
+                        {recommended === option.value && route && (
+                          <span className="rounded-full bg-primary-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                            Best
+                          </span>
+                        )}
+                      </div>
+
+                      {route ? (
+                        <>
+                          <p className="mt-2 text-lg font-black text-slate-900">
+                            {formatDuration(route.duration)}
+                          </p>
+
+                          <p className="text-xs font-semibold text-slate-500">
+                            {formatDistance(route.distance)}
+                          </p>
+
+                          {verdict ? (
+                            <span
+                              className={`mt-2 inline-block rounded-full px-2 py-0.5 text-[11px] font-bold ${verdict.className}`}
+                            >
+                              {verdict.label}
+                            </span>
+                          ) : (
+                            <span className="mt-2 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">
+                              Door to door
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <p className="mt-2 text-xs font-semibold text-slate-500">
+                          {loadingRoute ? 'Calculating...' : 'Route unavailable'}
+                        </p>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {wheelchairDistance !== null &&
+                wheelchairDistance > WHEELCHAIR_MAX_M && (
+                  <p className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                    This is {formatDistance(wheelchairDistance)} away. That is
+                    too far to travel by wheelchair alone, so a car or an
+                    accessible taxi is the practical choice.
+                  </p>
+                )}
+
+              {wheelchairDistance !== null &&
+                wheelchairDistance > WHEELCHAIR_COMFORT_M &&
+                wheelchairDistance <= WHEELCHAIR_MAX_M && (
+                  <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                    Doable by wheelchair, but long. Check the battery or your
+                    energy, and consider a car for part of the way.
+                  </p>
+                )}
+
+              {/* ROUTE OPTIONS */}
+
+              {activeList.length > 1 && (
+                <div className="mt-4">
+                  <p className="mb-2 text-sm font-bold text-slate-800">
+                    Routes
+                  </p>
+
+                  <div className="space-y-2">
+                    {activeList.map((route, i) => {
+                      const via = viaName(route);
+
+                      return (
+                        <button
+                          key={`opt-${i}`}
+                          type="button"
+                          onClick={() => setSelectedIdx(i)}
+                          aria-pressed={i === safeIdx}
+                          className={`flex w-full items-center justify-between gap-3 rounded-2xl border-2 px-4 py-3 text-left ${
+                            i === safeIdx
+                              ? 'border-primary-600 bg-primary-50'
+                              : 'border-slate-200 bg-white'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-extrabold text-slate-900">
+                              {via ? `via ${via}` : `Route ${i + 1}`}
+                            </p>
+
+                            <p className="text-xs font-semibold text-slate-500">
+                              {formatDistance(route.distance)}
+                              {i === fastestIdx ? ' · Fastest' : ''}
+                              {i === shortestIdx && i !== fastestIdx
+                                ? ' · Shortest'
+                                : ''}
+                            </p>
+                          </div>
+
+                          <p className="shrink-0 text-lg font-black text-slate-900">
+                            {formatDuration(route.duration)}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <p className="mt-3 text-[11px] text-slate-400">
+                {activeMode === 'vehicle'
+                  ? `Car time includes a x${CAR_TRAFFIC_FACTOR} city-traffic allowance; live traffic is not available.`
+                  : activeRoute?.source === 'ORS'
+                    ? 'Wheelchair time comes from the OpenRouteService wheelchair profile.'
+                    : 'Wheelchair time assumes about 4 km/h. Add an OpenRouteService key for a wheelchair-specific estimate.'}
+              </p>
+
+              <button
+                type="button"
+                disabled={!activeRoute}
+                onClick={() => {
+                  setFollowing(true);
+                  setPhase('navigating');
+                }}
+                className="mt-4 w-full rounded-2xl bg-primary-600 px-4 py-4 text-base font-extrabold text-white shadow-sm disabled:opacity-50"
+              >
+                {activeRoute
+                  ? `Start navigation · ${formatDuration(activeRoute.duration)}`
+                  : 'Route unavailable for this mode'}
+              </button>
+            </>
+          ) : (
+            <>
+              {/* CURRENT NAVIGATION */}
+
+              <div className="flex items-start gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-600 text-white">
+                  <NavigationIcon size={24} />
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <p className="text-lg font-extrabold text-slate-900">
+                    {currentStep
+                      ? getInstructionText(currentStep)
+                      : instructionTitle}
+                  </p>
+
+                  <p className="text-sm text-slate-500">
+                    {arrived
+                      ? `You are at or very close to ${destination.name}.`
+                      : currentStep
+                        ? `${formatDistance(instructionDistance)} until the next maneuver.`
+                        : 'Your position is being updated using GPS.'}
+                  </p>
+                </div>
+              </div>
+
+              {currentStep && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (currentStepIndex < routeSteps.length - 1) {
+                      setCurrentStepIndex(currentStepIndex + 1);
+                    }
+                  }}
+                  disabled={currentStepIndex >= routeSteps.length - 1}
+                  className="mt-4 w-full rounded-2xl bg-primary-600 px-4 py-3.5 text-sm font-extrabold text-white shadow-sm disabled:opacity-50"
+                >
+                  {currentStepIndex < routeSteps.length - 1
+                    ? 'Next step →'
+                    : 'Final step'}
+                </button>
+              )}
+
+              {/* ACCESSIBILITY STATUS */}
+
+              <div className="mt-3 flex items-center gap-3 rounded-2xl bg-accessible-50 p-3">
+                <span className="text-xl">
+                  {mode === 'wheelchair' ? '♿' : '👁'}
+                </span>
+
+                <p className="flex-1 text-sm font-semibold text-accessible-800">
+                  {mode === 'wheelchair'
+                    ? 'Wheelchair mode is active. Accessibility information will be used to identify potential obstacles and accessible features for this destination.'
+                    : 'Low-vision mode is active. Use the high-contrast map and voice guidance features where available.'}
+                </p>
+              </div>
+
+              {/* ACTION BUTTONS */}
+
+              <div className="mt-4 grid grid-cols-4 gap-2">
+                <NavAction
+                  icon={paused ? <Play size={18} /> : <Pause size={18} />}
+                  label={paused ? 'Resume' : 'Pause'}
+                  onClick={() => setPaused(!paused)}
+                />
+
+                <NavAction
+                  icon={<RefreshCw size={18} />}
+                  label="Recalc"
+                  onClick={recalculate}
+                />
+
+                <NavAction
+                  icon={<FileText size={18} />}
+                  label="Details"
+                  onClick={() => go('details')}
+                />
+
+                <NavAction
+                  icon={<AlertTriangle size={18} />}
+                  label="Report"
+                  onClick={() => go('report')}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setPhase('preview')}
+                className="mt-3 w-full rounded-2xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700"
+              >
+                Change route or travel mode
+              </button>
+
+              {paused && (
+                <div className="mt-3 rounded-2xl bg-primary-50 px-4 py-3 text-center">
+                  <p className="text-sm font-bold text-primary-700">
+                    Navigation paused
+                  </p>
+
+                  <p className="mt-1 text-xs text-primary-600">
+                    GPS tracking remains active.
+                  </p>
+                </div>
+              )}
+
+              {arrived && (
+                <div className="mt-3 flex items-center justify-center gap-2 rounded-2xl bg-accessible-50 py-3 text-sm font-bold text-accessible-700">
+                  <Check size={16} strokeWidth={3} />
+                  You have arrived
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* ======================================================
           PAUSE OVERLAY
       ====================================================== */}
 
-      {paused && (
-        <Overlay
-          onClose={() =>
-            setPaused(false)
-          }
-        >
+      {paused && !isPreview && (
+        <Overlay onClose={() => setPaused(false)}>
           <div className="mb-4 flex justify-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary-100">
-              <Pause
-                size={28}
-                className="text-primary-700"
-              />
+              <Pause size={28} className="text-primary-700" />
             </div>
           </div>
 
@@ -1769,28 +1954,16 @@ const nextStep =
           </h2>
 
           <p className="mt-2 text-center text-sm text-slate-500">
-            Your live location is still available.
-            Resume when you are ready.
+            Your live location is still available. Resume when you are ready.
           </p>
 
           <div className="mt-6 space-y-3">
-            <Button
-              fullWidth
-              onClick={() =>
-                setPaused(false)
-              }
-            >
+            <Button fullWidth onClick={() => setPaused(false)}>
               <Play size={18} />
               Resume Navigation
             </Button>
 
-            <Button
-              fullWidth
-              variant="secondary"
-              onClick={() =>
-                go('home')
-              }
-            >
+            <Button fullWidth variant="secondary" onClick={() => go('home')}>
               End Navigation
             </Button>
           </div>
@@ -1817,9 +1990,7 @@ function NavAction({
     >
       {icon}
 
-      <span className="text-xs font-semibold">
-        {label}
-      </span>
+      <span className="text-xs font-semibold">{label}</span>
     </button>
   );
 }

@@ -8,6 +8,7 @@ import {
 
 import type {
   AccessibilityMode,
+  TravelMode,
   ScreenName,
   Place,
 } from './types';
@@ -18,11 +19,6 @@ import {
   removeToken,
 } from './api';
 
-
-// ============================================================
-// DESTINATION
-// ============================================================
-
 export interface Destination {
   name: string;
   lat: number;
@@ -30,266 +26,133 @@ export interface Destination {
   place?: Place;
 }
 
-
-// ============================================================
-// USER
-// ============================================================
-
 export interface User {
   id?: string;
   _id?: string;
   name?: string;
   email?: string;
-
   [key: string]: unknown;
 }
-
-
-// ============================================================
-// APP STATE
-// ============================================================
 
 interface AppState {
   screen: ScreenName;
   go: (s: ScreenName) => void;
 
-  // Authentication
   user: User | null;
   setUser: (user: User | null) => void;
   authLoading: boolean;
   logout: () => void;
 
-  // Accessibility
   mode: AccessibilityMode;
   setMode: (m: AccessibilityMode) => void;
 
-  // Destination
+  travelMode: TravelMode;
+  setTravelMode: (mode: TravelMode) => void;
+
   destination: Destination | null;
   setDestination: (destination: Destination) => void;
 
-  // Route
-  selectedRoute:
-    | 'accessible'
-    | 'fastest'
-    | 'clear';
-
+  selectedRoute: 'accessible' | 'fastest' | 'clear';
   setSelectedRoute: (
-    r:
-      | 'accessible'
-      | 'fastest'
-      | 'clear'
+    route: 'accessible' | 'fastest' | 'clear'
   ) => void;
 
-  // Navigation
   navStep: number;
   setNavStep: (n: number) => void;
 
-  // Pause
   paused: boolean;
   setPaused: (p: boolean) => void;
 
-  // SOS
   sosActive: boolean;
   setSosActive: (a: boolean) => void;
 }
 
-
-// ============================================================
-// CONTEXT
-// ============================================================
-
 const Ctx = createContext<AppState | null>(null);
-
-
-// ============================================================
-// PROVIDER
-// ============================================================
 
 export function AppProvider({
   children,
 }: {
   children: ReactNode;
 }) {
+  const [screen, setScreen] = useState<ScreenName>('splash');
 
-  const [screen, setScreen] =
-    useState<ScreenName>('splash');
-
-  const [user, setUser] =
-    useState<User | null>(null);
-
-  const [authLoading, setAuthLoading] =
-    useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   const [mode, setMode] =
     useState<AccessibilityMode>('wheelchair');
+
+  const [travelMode, setTravelMode] =
+    useState<TravelMode>('wheelchair');
 
   const [destination, setDestination] =
     useState<Destination | null>(null);
 
   const [selectedRoute, setSelectedRoute] =
-    useState<
-      'accessible'
-      | 'fastest'
-      | 'clear'
-    >('accessible');
+    useState<'accessible' | 'fastest' | 'clear'>('accessible');
 
-  const [navStep, setNavStep] =
-    useState(0);
-
-  const [paused, setPaused] =
-    useState(false);
-
-  const [sosActive, setSosActive] =
-    useState(false);
-
-
-  // ==========================================================
-  // RESTORE LOGIN SESSION
-  // ==========================================================
+  const [navStep, setNavStep] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const [sosActive, setSosActive] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
 
     async function restoreSession() {
-
       const token = getToken();
 
-
-      // ------------------------------------------------------
-      // No token
-      //
-      // This means the user has NOT logged in.
-      //
-      // IMPORTANT:
-      // Keep screen as "splash".
-      //
-      // Splash will show:
-      // Splash → Welcome → Login
-      // ------------------------------------------------------
-
       if (!token) {
-
-        setAuthLoading(false);
-
+        if (!cancelled) setAuthLoading(false);
         return;
       }
 
-
-      // ------------------------------------------------------
-      // Token exists
-      //
-      // Verify token with backend.
-      // ------------------------------------------------------
-
       try {
+        const currentUser = await getCurrentUser();
 
-        console.log(
-          'Restoring saved login session...'
-        );
-
-
-        const currentUser =
-          await getCurrentUser();
-
-
-        console.log(
-          'User session restored:',
-          currentUser
-        );
-
+        if (cancelled) return;
 
         setUser(currentUser);
-
-
-        // ----------------------------------------------------
-        // User was already logged in.
-        //
-        // Skip Login/Welcome and go to Home.
-        // ----------------------------------------------------
-
         setScreen('home');
-
       } catch (error) {
+        if (cancelled) return;
 
-        console.error(
-          'Saved session is invalid:',
-          error
-        );
-
-
-        // Token is invalid/expired.
+        console.error('Saved session is invalid:', error);
         removeToken();
-
         setUser(null);
-
-
-        // Go through normal logged-out flow.
         setScreen('splash');
-
       } finally {
-
-        setAuthLoading(false);
-
+        if (!cancelled) setAuthLoading(false);
       }
     }
 
+    void restoreSession();
 
-    restoreSession();
-
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-
-  // ==========================================================
-  // LOGOUT
-  // ==========================================================
-
   const logout = () => {
-
-    console.log('User logged out');
-
-
-    // Remove JWT
     removeToken();
-
-
-    // Remove current user
     setUser(null);
-
-
-    // Reset application state
     setDestination(null);
     setNavStep(0);
     setPaused(false);
     setSosActive(false);
-
-
-    // IMPORTANT:
-    // Go to Login directly after logout.
     setScreen('login');
   };
 
+  const go = (nextScreen: ScreenName) => {
+    setScreen(nextScreen);
 
-  // ==========================================================
-  // NAVIGATION
-  // ==========================================================
-
-  const go = (s: ScreenName) => {
-
-    setScreen(s);
-
-    if (s === 'navigation') {
+    if (nextScreen === 'navigation') {
       setNavStep(0);
     }
   };
 
-
-  // ==========================================================
-  // PROVIDER
-  // ==========================================================
-
   return (
     <Ctx.Provider
       value={{
-
         screen,
         go,
 
@@ -300,6 +163,9 @@ export function AppProvider({
 
         mode,
         setMode,
+
+        travelMode,
+        setTravelMode,
 
         destination,
         setDestination,
@@ -322,19 +188,11 @@ export function AppProvider({
   );
 }
 
-
-// ============================================================
-// HOOK
-// ============================================================
-
 export function useApp() {
-
   const context = useContext(Ctx);
 
   if (!context) {
-    throw new Error(
-      'useApp must be used within AppProvider'
-    );
+    throw new Error('useApp must be used within AppProvider');
   }
 
   return context;

@@ -17,6 +17,8 @@ export type ScreenName =
 
 export type AccessibilityMode = 'wheelchair' | 'lowvision';
 
+export type TravelMode = 'vehicle' | 'walking' | 'wheelchair';
+
 export interface Place {
   id: string;
   name: string;
@@ -25,15 +27,10 @@ export interface Place {
   score: number;
   tags: string[];
   warnings: string[];
-
-  // Existing coordinates used by the original AccessMob UI
   x: number;
   y: number;
-
-  // Real geographic coordinates used by Leaflet/OpenStreetMap
   latitude: number;
   longitude: number;
-
   emoji: string;
 }
 
