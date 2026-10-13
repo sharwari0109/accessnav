@@ -28,6 +28,7 @@ import {
   MapContainer,
   Marker,
   Polyline,
+  Pane,
   TileLayer,
   useMap,
   useMapEvents,
@@ -87,6 +88,8 @@ interface RouteData {
   duration: number;
   steps: OSRMStep[];
   source: 'ORS' | 'OSRM';
+  /** True when OpenRouteService applied the slope/kerb/width limits. */
+  avoidsObstacles?: boolean;
 }
 
 interface ORSStep {
@@ -104,6 +107,16 @@ interface ORSStep {
  * the app falls back to the free OSRM servers.
  */
 const ORS_API_KEY = import.meta.env.VITE_ORS_API_KEY as string | undefined;
+
+// Why the last OpenRouteService call failed (shown in the preview so you
+// can see what is wrong without opening dev tools).
+let lastOrsError = '';
+
+console.info(
+  '[AccessNav] OpenRouteService key loaded:',
+  Boolean(ORS_API_KEY),
+  ORS_API_KEY ? `(length ${ORS_API_KEY.length})` : '',
+);
 
 /*
  * Neither OSRM nor OpenRouteService knows live traffic, so car times are
@@ -126,6 +139,13 @@ const EMPTY_STEPS: OSRMStep[] = [];
 const WHEELCHAIR_SPEED_MPS = 1.1;
 const WHEELCHAIR_COMFORT_M = 2000;
 const WHEELCHAIR_MAX_M = 5000;
+
+// Sent to OpenRouteService's wheelchair profile (needs VITE_ORS_API_KEY).
+// Tune these to the person's chair. Strict limits can make a route
+// impossible, so the app retries without them if nothing is found.
+const WHEELCHAIR_MAX_INCLINE_PCT = 6;
+const WHEELCHAIR_MAX_KERB_M = 0.06;
+const WHEELCHAIR_MIN_WIDTH_M = 1.0;
 
 type Verdict = {
   label: string;
@@ -261,7 +281,7 @@ async function fetchOrsRoute(
 ): Promise<RouteData[]> {
   const profile = modeKey === 'vehicle' ? 'driving-car' : 'wheelchair';
 
-  const request = (withAlternatives: boolean) =>
+  const request = (withAlternatives: boolean, withRestrictions: boolean) =>
     fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
       method: 'POST',
       headers: {
@@ -283,19 +303,68 @@ async function fetchOrsRoute(
               },
             }
           : {}),
+        ...(withRestrictions
+          ? {
+              options: {
+                profile_params: {
+                  restrictions: {
+                    maximum_incline: WHEELCHAIR_MAX_INCLINE_PCT,
+                    maximum_sloped_kerb: WHEELCHAIR_MAX_KERB_M,
+                    minimum_width: WHEELCHAIR_MIN_WIDTH_M,
+                  },
+                },
+              },
+            }
+          : {}),
       }),
     });
 
-  // Alternatives are only supported on shorter trips, so retry without.
-  let response = await request(true);
+  // Try the strictest request first, then relax: alternatives are only
+  // supported on shorter trips, and tight wheelchair limits can leave no
+  // route where map data is sparse.
+  const attempts =
+    modeKey === 'wheelchair'
+      ? [
+          { alt: true, restrict: true },
+          { alt: false, restrict: true },
+          { alt: true, restrict: false },
+          { alt: false, restrict: false },
+        ]
+      : [
+          { alt: true, restrict: false },
+          { alt: false, restrict: false },
+        ];
 
-  if (!response.ok) {
-    response = await request(false);
+  let response: Response | null = null;
+  let restricted = false;
+  let lastFailure = '';
+
+  for (const attempt of attempts) {
+    try {
+      const result = await request(attempt.alt, attempt.restrict);
+
+      if (result.ok) {
+        response = result;
+        restricted = attempt.restrict;
+        break;
+      }
+
+      const body = (await result.text()).slice(0, 200);
+      lastFailure = `HTTP ${result.status} ${body}`;
+      console.warn('[AccessNav] OpenRouteService attempt failed:', profile, attempt, lastFailure);
+    } catch (err) {
+      // Usually a network / CORS / blocked-request problem.
+      lastFailure = `Request blocked or offline: ${String(err)}`;
+      console.warn('[AccessNav] OpenRouteService request error:', err);
+    }
   }
 
-  if (!response.ok) {
-    throw new Error(`OpenRouteService returned ${response.status}`);
+  if (!response) {
+    lastOrsError = lastFailure;
+    throw new Error(lastFailure || 'OpenRouteService could not return a route.');
   }
+
+  lastOrsError = '';
 
   const data = (await response.json()) as ORSResponse;
 
@@ -328,6 +397,7 @@ async function fetchOrsRoute(
       duration: feature.properties.summary.duration,
       steps,
       source: 'ORS' as const,
+      avoidsObstacles: restricted,
     };
   });
 }
@@ -357,8 +427,23 @@ async function fetchRouteForMode(
       : route,
   );
 
-  // Fastest first.
-  return result.sort((x, y) => x.duration - y.duration);
+  // Fastest first, then drop near-identical alternatives (same distance
+  // and time within a couple of percent) so the list is not repeated.
+  const sorted = result.sort((x, y) => x.duration - y.duration);
+
+  return sorted.filter(
+    (route, i) =>
+      !sorted
+        .slice(0, i)
+        .some(
+          (kept) =>
+            (Math.abs(kept.distance - route.distance) / route.distance < 0.02 &&
+              Math.abs(kept.duration - route.duration) / route.duration < 0.03) ||
+            (viaName(kept) !== '' &&
+              viaName(kept) === viaName(route) &&
+              Math.abs(kept.duration - route.duration) / route.duration < 0.05),
+        ),
+  );
 }
 
 function viaName(route: RouteData): string {
@@ -1413,7 +1498,48 @@ export default function Navigation() {
     0,
   );
 
-  const labelFractions = [0.5, 0.35, 0.65];
+  // Place each time label at a point on its own line that is far enough
+  // from the labels already placed. The selected route is placed first so
+  // it gets the best spot.
+  const labelPositions: Record<number, [number, number]> = {};
+
+  if (isPreview && activeList.length > 0) {
+    const minGap = previewBounds
+      ? previewBounds.getNorthEast().distanceTo(previewBounds.getSouthWest()) *
+        0.12
+      : 0;
+
+    const order = [
+      safeIdx,
+      ...activeList.map((_, i) => i).filter((i) => i !== safeIdx),
+    ];
+
+    const placed: [number, number][] = [];
+
+    for (const i of order) {
+      const line = activeList[i].coordinates;
+
+      if (line.length < 2) continue;
+
+      let chosen = line[Math.floor(line.length * 0.5)];
+
+      for (const fraction of [0.5, 0.35, 0.65, 0.25, 0.75, 0.15, 0.85]) {
+        const point = line[Math.min(line.length - 1, Math.floor(line.length * fraction))];
+
+        const farEnough = placed.every(
+          (other) => L.latLng(point).distanceTo(L.latLng(other)) >= minGap,
+        );
+
+        if (farEnough) {
+          chosen = point;
+          break;
+        }
+      }
+
+      placed.push(chosen);
+      labelPositions[i] = chosen;
+    }
+  }
 
   return (
     <div className="screen-enter relative h-full w-full overflow-hidden bg-slate-100">
@@ -1457,6 +1583,8 @@ export default function Navigation() {
           />
 
           {/* Alternative routes: grey, tap to select (preview only) */}
+          {/* Own pane: always drawn UNDER the selected route */}
+          <Pane name="alt-routes" style={{ zIndex: 410 }}>
           {isPreview &&
             activeList.map((route, i) =>
               i === safeIdx || route.coordinates.length < 2 ? null : (
@@ -1469,7 +1597,10 @@ export default function Navigation() {
               ),
             )}
 
+          </Pane>
+
           {/* Selected route */}
+          <Pane name="selected-route" style={{ zIndex: 420 }}>
           {routeCoordinates.length > 1 && (
             <>
               <Polyline
@@ -1484,21 +1615,19 @@ export default function Navigation() {
             </>
           )}
 
+          </Pane>
+
           {/* Time labels on each route line (preview only) */}
           {isPreview &&
             activeList.map((route, i) => {
               if (route.coordinates.length < 2) return null;
 
-              const at =
-                route.coordinates[
-                  Math.min(
-                    route.coordinates.length - 1,
-                    Math.floor(
-                      route.coordinates.length *
-                        (labelFractions[i] ?? 0.5),
-                    ),
-                  )
-                ];
+              // Only the selected route shows its time on the map.
+              if (i !== safeIdx) return null;
+
+              const at = labelPositions[i];
+
+              if (!at) return null;
 
               return (
                 <RouteLabel
@@ -1803,8 +1932,12 @@ export default function Navigation() {
                 {activeMode === 'vehicle'
                   ? `Car time includes a x${CAR_TRAFFIC_FACTOR} city-traffic allowance; live traffic is not available.`
                   : activeRoute?.source === 'ORS'
-                    ? 'Wheelchair time comes from the OpenRouteService wheelchair profile.'
-                    : 'Wheelchair time assumes about 4 km/h. Add an OpenRouteService key for a wheelchair-specific estimate.'}
+                    ? activeRoute.avoidsObstacles
+                      ? `Wheelchair route avoids slopes over ${WHEELCHAIR_MAX_INCLINE_PCT}% and kerbs over ${Math.round(WHEELCHAIR_MAX_KERB_M * 100)} cm where map data exists. Time is from the OpenRouteService wheelchair profile.`
+                      : 'Wheelchair time comes from the OpenRouteService wheelchair profile. No route met the slope/kerb limits, so they were relaxed.'
+                    : ORS_API_KEY
+                      ? `OpenRouteService key found but the request failed: ${lastOrsError || 'unknown error'}. Using the free server (4 km/h estimate).`
+                      : 'No OpenRouteService key found, so the wheelchair time assumes about 4 km/h. Check that .env is in the accessnav folder and restart npm run dev.'}
               </p>
 
               <button
