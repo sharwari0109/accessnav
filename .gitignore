@@ -25,3 +25,18 @@ dist-ssr
 venv/
 __pycache__/
 *.pyc
+
+# Android build files
+android/.gradle/
+android/**/build/
+android/local.properties
+android/.idea/
+
+# iOS temporary files
+ios/App/Pods/
+ios/App/build/
+ios/DerivedData/
+
+# Environment files
+.env.*
+!.env.example
