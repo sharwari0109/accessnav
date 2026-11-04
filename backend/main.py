@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Query
@@ -52,7 +53,11 @@ app.add_middleware(
 # AUTHENTICATION CONFIGURATION
 # ============================================================
 
-SECRET_KEY = "accessmob-development-secret-key"
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY is not set")
+
 ALGORITHM = "HS256"
 
 pwd_context = CryptContext(
