@@ -40,3 +40,7 @@ ios/DerivedData/
 # Environment files
 .env.*
 !.env.example
+# AccessNav release security and generated files
+accessnav-release-key.jks
+android/app/release/
+android/app/src/main/res/drawable/splash_old.png

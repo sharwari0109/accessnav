@@ -1,4 +1,4 @@
-const API_URL = "http://192.168.0.232:8000";
+const API_URL = "https://accessnav-backend.onrender.com";
 
 // ============================================================
 // TOKEN HELPERS
