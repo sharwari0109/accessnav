@@ -1,4 +1,6 @@
-const API_URL = "https://accessnav-backend.onrender.com";
+const API_URL =
+  import.meta.env.VITE_API_URL ||
+  "https://accessnav-backend.onrender.com";
 
 // ============================================================
 // TOKEN HELPERS
@@ -21,10 +23,11 @@ export function removeToken() {
 // COMMON REQUEST HELPER
 // ============================================================
 
-async function apiFetch(
+
+async function apiFetch<T = any>(
   endpoint: string,
   options: RequestInit = {}
-) {
+): Promise<T> {
   const token = getToken();
 
   const headers = new Headers(options.headers);
@@ -37,32 +40,77 @@ async function apiFetch(
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(
-    `${API_URL}${endpoint}`,
-    {
-      ...options,
-      headers,
-    }
-  );
+  const response = await fetch(`${API_URL}${endpoint}`, {
+    ...options,
+    headers,
+  });
 
   if (!response.ok) {
     let message = "API request failed";
 
     try {
-      const errorData = await response.json();
+      const errorData: unknown = await response.json();
 
-      message =
-        errorData.detail ||
-        errorData.message ||
-        message;
+      const formatError = (value: unknown): string => {
+        if (typeof value === "string") {
+          return value;
+        }
+
+        if (Array.isArray(value)) {
+          return value
+            .map((item) => {
+              if (typeof item === "string") return item;
+
+              if (item && typeof item === "object") {
+                const error = item as Record<string, unknown>;
+                const location = Array.isArray(error.loc)
+                  ? error.loc.join(" → ")
+                  : "";
+
+                if (typeof error.msg === "string") {
+                  return location
+                    ? `${location}: ${error.msg}`
+                    : error.msg;
+                }
+
+                return JSON.stringify(item);
+              }
+
+              return String(item);
+            })
+            .join("; ");
+        }
+
+        if (value && typeof value === "object") {
+          const error = value as Record<string, unknown>;
+
+          if (error.detail !== undefined) {
+            return formatError(error.detail);
+          }
+
+          if (error.message !== undefined) {
+            return formatError(error.message);
+          }
+
+          if (error.msg !== undefined) {
+            return formatError(error.msg);
+          }
+
+          return JSON.stringify(value);
+        }
+
+        return "API request failed";
+      };
+
+      message = formatError(errorData) || message;
     } catch {
-      // Ignore JSON parsing errors
+      message = `API request failed (${response.status})`;
     }
 
     throw new Error(message);
   }
 
-  return response.json();
+  return (await response.json()) as T;
 }
 
 
@@ -499,4 +547,81 @@ export async function submitReport(
 
 export async function getReports() {
   return apiFetch("/api/reports");
+}
+
+// ============================================================
+// EMERGENCY CONTACTS
+// ============================================================
+
+export interface EmergencyContact {
+  id: string;
+  name: string;
+  phone: string;
+  relationship: string;
+  created_at?: string;
+}
+
+export interface EmergencyContactRequest {
+  name: string;
+  phone: string;
+  relationship?: string;
+}
+
+export async function getEmergencyContacts(): Promise<{
+  contacts: EmergencyContact[];
+}> {
+  return apiFetch("/api/emergency-contacts");
+}
+
+export async function addEmergencyContact(
+  contact: EmergencyContactRequest
+) {
+  return apiFetch("/api/emergency-contacts", {
+    method: "POST",
+    body: JSON.stringify(contact),
+  });
+}
+
+export async function deleteEmergencyContact(
+  contactId: string
+) {
+  return apiFetch(
+    `/api/emergency-contacts/${encodeURIComponent(contactId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+}
+
+
+// ============================================================
+// SOS ACTIVATION
+// ============================================================
+
+export interface SOSActivationRequest {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+}
+
+export interface SOSActivationResponse {
+  message: string;
+  alert_id: string;
+  location: {
+    latitude: number;
+    longitude: number;
+    maps_url: string;
+  };
+  contacts_count: number;
+  notification_status: string;
+  notifications_sent: boolean;
+}
+
+export async function activateSOS(
+  alert: SOSActivationRequest
+): Promise<SOSActivationResponse> {
+  return apiFetch("/api/sos/activate", {
+    method: "POST",
+    body: JSON.stringify(alert),
+  });
 }

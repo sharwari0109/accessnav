@@ -1,4 +1,6 @@
 import os
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Query
@@ -15,6 +17,8 @@ from database import (
     saved_collection,
     reports_collection,
     users_collection,
+    emergency_contacts_collection,
+    sos_alerts_collection,
 )
 
 
@@ -88,6 +92,17 @@ class ReportRequest(BaseModel):
     reportType: str
     description: str = ""
 
+
+class EmergencyContactRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    phone: str = Field(..., min_length=7, max_length=20)
+    relationship: str = Field(default="", max_length=40)
+
+
+class SOSAlertRequest(BaseModel):
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
+    accuracy: Optional[float] = Field(default=None, ge=0)
 
 # ============================================================
 # ACCESSIBILITY MODELS
@@ -222,6 +237,151 @@ def health():
         "status": "healthy",
     }
 
+# ============================================================
+# EMERGENCY CONTACTS
+# ============================================================
+
+@app.get("/api/emergency-contacts")
+def get_emergency_contacts(
+    current_user: dict = Depends(get_current_user),
+):
+    contacts = list(
+        emergency_contacts_collection.find(
+            {"user_id": current_user["id"]},
+            {
+                "_id": 0,
+                "user_id": 0,
+            },
+        )
+    )
+
+    return {"contacts": contacts}
+
+
+@app.post("/api/emergency-contacts")
+def add_emergency_contact(
+    contact: EmergencyContactRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    name = contact.name.strip()
+    phone = contact.phone.strip()
+
+    if not name or not phone:
+        raise HTTPException(
+            status_code=400,
+            detail="Name and phone number are required",
+        )
+
+    existing = emergency_contacts_collection.find_one(
+        {
+            "user_id": current_user["id"],
+            "phone": phone,
+        }
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="This emergency contact already exists",
+        )
+
+    new_contact = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user["id"],
+        "name": name,
+        "phone": phone,
+        "relationship": contact.relationship.strip(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    emergency_contacts_collection.insert_one(new_contact)
+
+    return {
+        "message": "Emergency contact added successfully",
+        "contact": {
+    key: value
+    for key, value in new_contact.items()
+    if key not in ("user_id", "_id")
+},
+    }
+
+
+@app.delete("/api/emergency-contacts/{contact_id}")
+def delete_emergency_contact(
+    contact_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    result = emergency_contacts_collection.delete_one(
+        {
+            "id": contact_id,
+            "user_id": current_user["id"],
+        }
+    )
+
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="Emergency contact not found",
+        )
+
+    return {
+        "message": "Emergency contact deleted successfully"
+    }
+
+# ============================================================
+# SOS ACTIVATION
+# ============================================================
+
+@app.post("/api/sos/activate")
+def activate_sos(
+    alert: SOSAlertRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    contacts = list(
+        emergency_contacts_collection.find(
+            {"user_id": current_user["id"]},
+            {
+                "_id": 0,
+                "id": 1,
+                "name": 1,
+                "phone": 1,
+            },
+        )
+    )
+
+    alert_id = str(uuid.uuid4())
+
+    maps_url = (
+        f"https://www.google.com/maps?q="
+        f"{alert.latitude},{alert.longitude}"
+    )
+
+    new_alert = {
+        "id": alert_id,
+        "user_id": current_user["id"],
+        "latitude": alert.latitude,
+        "longitude": alert.longitude,
+        "accuracy": alert.accuracy,
+        "maps_url": maps_url,
+        "contacts": contacts,
+        "notification_status": "not_configured",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    sos_alerts_collection.insert_one(new_alert)
+
+    return {
+        "message": "SOS alert recorded successfully",
+        "alert_id": alert_id,
+        "location": {
+            "latitude": alert.latitude,
+            "longitude": alert.longitude,
+            "maps_url": maps_url,
+        },
+        "contacts_count": len(contacts),
+        "notification_status": "not_configured",
+        "notifications_sent": False,
+    }
 
 # ============================================================
 # AUTHENTICATION
