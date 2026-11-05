@@ -1,7 +1,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Geolocation } from '@capacitor/geolocation';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Share } from '@capacitor/share';
 import { useApp } from '@/store';
 import Overlay from '@/components/Overlay';
 import Button from '@/components/Button';
@@ -26,6 +27,11 @@ import {
 } from '@/api';
 
 const HOLD_MS = 1500;
+
+// NATIVE ANDROID LOCATION SETTINGS PLUGIN
+const LocationSettings = registerPlugin<{
+  openSettings: () => Promise<void>;
+}>('LocationSettings');
 
 export default function SOS() {
   const { go, sosActive, setSosActive } = useApp();
@@ -80,11 +86,28 @@ export default function SOS() {
     void loadContacts();
   }, []);
 
+  // OPEN ANDROID LOCATION SETTINGS
+
+  const openLocationSettings = async () => {
+    if (Capacitor.getPlatform() === 'android') {
+      try {
+        await LocationSettings.openSettings();
+      } catch (err) {
+        console.error('Unable to open Location Settings:', err);
+        setError(
+          'Unable to open Location Settings. Please open your phone Settings and enable Location manually.'
+        );
+      }
+    } else {
+      setError(
+        'Please enable Location Services in your device settings.'
+      );
+    }
+  };
+
   // GET CURRENT GPS LOCATION
 
   const getCurrentLocation = async () => {
-    // ANDROID APP: Use Capacitor Geolocation
-
     if (Capacitor.isNativePlatform()) {
       const permission = await Geolocation.checkPermissions();
 
@@ -98,9 +121,7 @@ export default function SOS() {
           requested.location !== 'granted' &&
           requested.coarseLocation !== 'granted'
         ) {
-          throw new Error(
-            'Location permission is required to activate SOS.'
-          );
+          throw new Error('Location permission is required.');
         }
       }
 
@@ -117,10 +138,10 @@ export default function SOS() {
       };
     }
 
-    // WEBSITE: Use browser Geolocation API
-
     if (!navigator.geolocation) {
-      throw new Error('Geolocation is not supported by this browser.');
+      throw new Error(
+        'Geolocation is not supported by this browser.'
+      );
     }
 
     return new Promise<{
@@ -297,34 +318,35 @@ export default function SOS() {
   const messageEmergencyContact = async (
     contact: EmergencyContact
   ) => {
-    try {
-      setError('');
+    setError('');
+    setSuccess('');
 
-      // Use the SOS location if already available.
-      // Otherwise, get the current location.
+    let locationUrl = mapsUrl;
 
-      let locationUrl = mapsUrl;
-
-      if (!locationUrl) {
+    if (!locationUrl) {
+      try {
         const location = await getCurrentLocation();
 
         locationUrl =
           `https://www.google.com/maps?q=` +
           `${location.latitude},${location.longitude}`;
+      } catch {
+        locationUrl = '';
       }
+    }
 
-      const message = encodeURIComponent(
-        `EMERGENCY ALERT: I need help. My current location is: ${locationUrl}`
-      );
+    const message = locationUrl
+      ? `EMERGENCY ALERT: I need help. My current location is: ${locationUrl}`
+      : `EMERGENCY ALERT: I need help. My location could not be retrieved. Please contact me immediately.`;
 
-      const cleanPhone = contact.phone.replace(/[^\d+]/g, '');
+    const cleanPhone = contact.phone.replace(/[^\d+]/g, '');
 
-      window.location.href = `sms:${cleanPhone}?body=${message}`;
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to open the messaging app.'
+    window.location.href =
+      `sms:${cleanPhone}?body=${encodeURIComponent(message)}`;
+
+    if (!locationUrl) {
+      setSuccess(
+        'Location unavailable. The emergency SMS will open without a location link.'
       );
     }
   };
@@ -348,41 +370,59 @@ export default function SOS() {
     window.location.href = `tel:${cleanPhone}`;
   };
 
-  // SHARE CURRENT LOCATION
+  // SHARE CURRENT LOCATION USING NATIVE SHARE MENU
 
   const shareCurrentLocation = async () => {
+    setSharing(true);
+    setError('');
+    setSuccess('');
+
+    let location;
+
+    // STEP 1: GET LOCATION
     try {
-      setSharing(true);
-      setError('');
-
-      const location = await getCurrentLocation();
-
-      const url =
-        `https://www.google.com/maps?q=` +
-        `${location.latitude},${location.longitude}`;
-
-      const message = `My current location: ${url}`;
-
-      if (navigator.share) {
-        await navigator.share({
-          title: 'My Emergency Location',
-          text: message,
-        });
-      } else if (navigator.clipboard) {
-        await navigator.clipboard.writeText(message);
-        setSuccess('Location link copied. You can share it with someone.');
-      } else {
-        window.open(url, '_blank');
-      }
+      location = await getCurrentLocation();
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        return;
+      console.error('Location error:', err);
+
+      if (Capacitor.getPlatform() === 'android') {
+        setError(
+          'Location is disabled or unavailable. Opening Location Settings. Please enable Location and try again.'
+        );
+
+        await openLocationSettings();
+      } else {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Unable to retrieve your location.'
+        );
       }
+
+      setSharing(false);
+      return;
+    }
+
+    // STEP 2: CREATE GOOGLE MAPS LINK
+    const url =
+      `https://www.google.com/maps?q=` +
+      `${location.latitude},${location.longitude}`;
+
+    const message = `My current location: ${url}`;
+
+    // STEP 3: OPEN NATIVE SHARE MENU
+    try {
+      await Share.share({
+        title: 'My Emergency Location',
+        text: message,
+        url,
+        dialogTitle: 'Share your current location',
+      });
+    } catch (err) {
+      console.error('Share error:', err);
 
       setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to share your location.'
+        'Unable to open the sharing menu. Please try again.'
       );
     } finally {
       setSharing(false);
@@ -577,7 +617,7 @@ export default function SOS() {
             </Button>
           </div>
 
-          {/* COLLAPSIBLE EMERGENCY CONTACT MANAGEMENT */}
+          {/* EMERGENCY CONTACT MANAGEMENT */}
 
           <div className="mt-8 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm">
 
