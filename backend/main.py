@@ -41,6 +41,7 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://majorr.netlify.app",
+    "https://sweet-elf-444cda.netlify.app",
     "https://localhost",
 ]
 
