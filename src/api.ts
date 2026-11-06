@@ -1,6 +1,13 @@
+import { Capacitor } from "@capacitor/core";
+
 const API_URL =
   import.meta.env.VITE_API_URL ||
-  "https://accessnav-backend.onrender.com";
+  (Capacitor.getPlatform() === "android"
+    ? "http://10.0.2.2:8000"
+    : window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1"
+    ? "http://127.0.0.1:8000"
+    : "https://accessnav-backend.onrender.com");
 
 // ============================================================
 // TOKEN HELPERS

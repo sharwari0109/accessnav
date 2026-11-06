@@ -11,18 +11,18 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
-    "@capacitor/android": "^8.6.0",
-    "@capacitor/core": "^8.6.0",
-    "@capacitor/geolocation": "^8.2.4",
-    "@capacitor/ios": "^8.6.0",
-    "@capacitor/share": "^8.0.3",
-    "@supabase/supabase-js": "^2.57.4",
-    "leaflet": "^1.9.4",
-    "lucide-react": "^0.446.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-leaflet": "^4.2.1"
-  },
+  "@capacitor/android": "^8.6.0",
+  "@capacitor/core": "^8.6.0",
+  "@capacitor/geolocation": "^8.2.4",
+  "@capacitor/ios": "^8.6.0",
+  "@capacitor/share": "^8.0.3",
+  "@supabase/supabase-js": "^2.57.4",
+  "leaflet": "^1.9.4",
+  "lucide-react": "^0.446.0",
+  "react": "^18.3.1",
+  "react-dom": "^18.3.1",
+  "react-leaflet": "^4.2.1"
+},
   "devDependencies": {
     "@capacitor/cli": "^8.6.0",
     "@eslint/js": "^9.9.1",

@@ -27,7 +27,7 @@ from database import (
 # ============================================================
 
 app = FastAPI(
-    title="AccessMob API",
+    title="AccessNav API",
     description="Backend API for the AccessMob accessibility navigation app",
     version="1.1.0",
 )
@@ -42,7 +42,9 @@ origins = [
     "http://127.0.0.1:5173",
     "https://majorr.netlify.app",
     "https://sweet-elf-444cda.netlify.app",
+    "http://localhost",
     "https://localhost",
+    "capacitor://localhost",
 ]
 
 app.add_middleware(
