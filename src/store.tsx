@@ -1,3 +1,4 @@
+
 import {
   createContext,
   useContext,
@@ -26,6 +27,12 @@ export interface Destination {
   place?: Place;
 }
 
+export interface StartLocation {
+  name: string;
+  lat: number;
+  lng: number;
+}
+
 export interface User {
   id?: string;
   _id?: string;
@@ -46,11 +53,20 @@ interface AppState {
   mode: AccessibilityMode;
   setMode: (m: AccessibilityMode) => void;
 
+  largeText: boolean;
+  setLargeText: (enabled: boolean) => void;
+
+  voiceGuidance: boolean;
+  setVoiceGuidance: (enabled: boolean) => void;
+
   travelMode: TravelMode;
   setTravelMode: (mode: TravelMode) => void;
 
   destination: Destination | null;
   setDestination: (destination: Destination) => void;
+
+  startLocation: StartLocation | null;
+  setStartLocation: (location: StartLocation | null) => void;
 
   selectedRoute: 'accessible' | 'fastest' | 'clear';
   setSelectedRoute: (
@@ -82,11 +98,32 @@ export function AppProvider({
   const [mode, setMode] =
     useState<AccessibilityMode>('wheelchair');
 
+  // Load saved Large Text preference.
+  const [largeText, setLargeText] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('accessnav-large-text') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  // Load saved Voice Guidance preference.
+  const [voiceGuidance, setVoiceGuidance] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('accessnav-voice-guidance') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
   const [travelMode, setTravelMode] =
     useState<TravelMode>('wheelchair');
 
   const [destination, setDestination] =
     useState<Destination | null>(null);
+
+  const [startLocation, setStartLocation] =
+    useState<StartLocation | null>(null);
 
   const [selectedRoute, setSelectedRoute] =
     useState<'accessible' | 'fastest' | 'clear'>('accessible');
@@ -95,6 +132,42 @@ export function AppProvider({
   const [paused, setPaused] = useState(false);
   const [sosActive, setSosActive] = useState(false);
 
+  // Apply Large Text throughout the application and save the preference.
+  useEffect(() => {
+    document.documentElement.classList.toggle(
+      'large-text',
+      largeText
+    );
+
+    try {
+      localStorage.setItem(
+        'accessnav-large-text',
+        String(largeText)
+      );
+    } catch (error) {
+      console.error(
+        'Could not save Large Text preference:',
+        error
+      );
+    }
+  }, [largeText]);
+
+  // Save Voice Guidance preference.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        'accessnav-voice-guidance',
+        String(voiceGuidance)
+      );
+    } catch (error) {
+      console.error(
+        'Could not save Voice Guidance preference:',
+        error
+      );
+    }
+  }, [voiceGuidance]);
+
+  // Restore login session.
   useEffect(() => {
     let cancelled = false;
 
@@ -155,30 +228,28 @@ export function AppProvider({
       value={{
         screen,
         go,
-
         user,
         setUser,
         authLoading,
         logout,
-
         mode,
         setMode,
-
+        largeText,
+        setLargeText,
+        voiceGuidance,
+        setVoiceGuidance,
         travelMode,
         setTravelMode,
-
         destination,
         setDestination,
-
+        startLocation,
+        setStartLocation,
         selectedRoute,
         setSelectedRoute,
-
         navStep,
         setNavStep,
-
         paused,
         setPaused,
-
         sosActive,
         setSosActive,
       }}

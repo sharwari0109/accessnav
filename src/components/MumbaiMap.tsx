@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
 
 import type { AccessibilityMode } from '@/types';
+import { getNearbyReports, type NearbyReport } from '@/api';
 
 interface DestinationPoint {
   name: string;
@@ -559,6 +560,12 @@ export default function MumbaiMap({
   const [loadingPlaces, setLoadingPlaces] =
     useState(true);
 
+    const [communityReports, setCommunityReports] =
+  useState<NearbyReport[]>([]);
+
+const [loadingReports, setLoadingReports] =
+  useState(false);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -645,6 +652,48 @@ export default function MumbaiMap({
     destinationId,
     places,
   ]);
+
+  useEffect(() => {
+    let cancelled = false;
+  
+    async function fetchReports() {
+      if (!destination) {
+        setCommunityReports([]);
+        return;
+      }
+  
+      try {
+        setLoadingReports(true);
+  
+        const reports = await getNearbyReports(
+          destination[0],
+          destination[1]
+        );
+  
+        if (!cancelled) {
+          setCommunityReports(reports);
+        }
+      } catch (error) {
+        console.error(
+          'Unable to load community reports:',
+          error
+        );
+        if (!cancelled) {
+          setCommunityReports([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingReports(false);
+        }
+      }
+    }
+  
+    fetchReports();
+  
+    return () => {
+      cancelled = true;
+    };
+  }, [destination]);
 
   /*
    * Accessibility filtering.
@@ -879,7 +928,77 @@ export default function MumbaiMap({
               </Popup>
             </CircleMarker>
           );
-        })}
+        })}   
+        {/* -------------------------------------------------
+    Community-reported issues
+------------------------------------------------- */}
+
+{communityReports.map((report) => (
+  <CircleMarker
+    key={`report-${report.id}`}
+    center={[
+      report.latitude,
+      report.longitude,
+    ]}
+    radius={mode === 'lowvision' ? 17 : 12}
+    pathOptions={{
+      color: '#991b1b',
+      fillColor: '#ef4444',
+      fillOpacity: 1,
+      weight: 4,
+    }}
+  >
+    <Popup>
+      <div
+        style={{
+          minWidth: 190,
+          fontSize: mode === 'lowvision' ? 17 : 14,
+          lineHeight: 1.6,
+        }}
+      >
+        <strong>
+          ⚠️ Community Report
+        </strong>
+
+        <br />
+
+        <strong>Issue:</strong> {report.reportType}
+
+        <br />
+
+        <strong>Location:</strong> {report.placeName}
+
+        <br />
+
+        <strong>Description:</strong>
+
+        <div>
+          {report.description || 'No description provided.'}
+        </div>
+
+        <div
+          style={{
+            marginTop: 8,
+            color: '#b45309',
+            fontWeight: 700,
+          }}
+        >
+          Status: {report.status}
+        </div>
+
+        <div
+          style={{
+            marginTop: 5,
+            fontSize: 11,
+            color: '#64748b',
+          }}
+        >
+          Community-submitted information — not verified.
+        </div>
+      </div>
+    </Popup>
+  </CircleMarker>
+))}
 
         {/* -------------------------------------------------
             Route

@@ -1,3 +1,4 @@
+
 import { useState } from 'react';
 import type React from 'react';
 
@@ -13,6 +14,10 @@ export default function Profile() {
     setMode,
     user,
     logout,
+    largeText,
+    setLargeText,
+    voiceGuidance,
+    setVoiceGuidance,
   } = useApp();
 
   const [prefs, setPrefs] = useState({
@@ -27,9 +32,7 @@ export default function Profile() {
     clearCrossings: mode === 'lowvision',
     avoidIntersections: mode === 'lowvision',
 
-    largeText: false,
     appHighContrast: false,
-    appVoice: false,
   });
 
   const toggle = (key: keyof typeof prefs) => {
@@ -73,35 +76,27 @@ export default function Profile() {
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-24 pt-16">
 
-        {/* ==================================================
-            PROFILE
-        ================================================== */}
+        {/* PROFILE */}
 
         <div className="flex flex-col items-center">
 
-          {/* Profile avatar */}
           <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary-600 text-2xl font-extrabold text-white shadow-card">
             {user?.name
               ? user.name.charAt(0).toUpperCase()
               : 'U'}
           </div>
 
-          {/* User name */}
           <h2 className="mt-3 text-lg font-extrabold text-slate-900">
             {user?.name || 'User'}
           </h2>
 
-          {/* User email */}
           <p className="text-sm text-slate-500">
             {user?.email || ''}
           </p>
 
         </div>
 
-
-        {/* ==================================================
-            ACCESSIBILITY
-        ================================================== */}
+        {/* ACCESSIBILITY */}
 
         <Section title="Accessibility">
 
@@ -143,7 +138,6 @@ export default function Profile() {
 
           </div>
 
-
           <button
             onClick={() => go('setup')}
             className="mt-3 w-full rounded-xl bg-primary-50 py-3 text-sm font-bold text-primary-700"
@@ -153,142 +147,97 @@ export default function Profile() {
 
         </Section>
 
-
-        {/* ==================================================
-            NAVIGATION
-        ================================================== */}
+        {/* NAVIGATION */}
 
         <Section title="Navigation">
 
           <Row
             label="Most accessible route"
             on={prefs.mostAccessible}
-            onChange={() =>
-              toggle('mostAccessible')
-            }
+            onChange={() => toggle('mostAccessible')}
           />
 
           <Row
             label="Avoid stairs"
             on={prefs.avoidStairs}
-            onChange={() =>
-              toggle('avoidStairs')
-            }
+            onChange={() => toggle('avoidStairs')}
           />
 
           <Row
             label="Prefer ramps"
             on={prefs.preferRamps}
-            onChange={() =>
-              toggle('preferRamps')
-            }
+            onChange={() => toggle('preferRamps')}
           />
 
           <Row
             label="Prefer elevators"
             on={prefs.preferElevators}
-            onChange={() =>
-              toggle('preferElevators')
-            }
+            onChange={() => toggle('preferElevators')}
           />
 
           <Row
             label="Avoid steep slopes"
             on={prefs.avoidSteepSlopes}
-            onChange={() =>
-              toggle('avoidSteepSlopes')
-            }
+            onChange={() => toggle('avoidSteepSlopes')}
           />
 
           <Row
             label="High contrast"
             on={prefs.highContrast}
-            onChange={() =>
-              toggle('highContrast')
-            }
+            onChange={() => toggle('highContrast')}
           />
 
           <Row
             label="Voice navigation"
             on={prefs.voiceNav}
-            onChange={() =>
-              toggle('voiceNav')
-            }
+            onChange={() => toggle('voiceNav')}
           />
 
           <Row
             label="Clear crossings"
             on={prefs.clearCrossings}
-            onChange={() =>
-              toggle('clearCrossings')
-            }
+            onChange={() => toggle('clearCrossings')}
           />
 
           <Row
             label="Avoid complicated intersections"
             on={prefs.avoidIntersections}
-            onChange={() =>
-              toggle('avoidIntersections')
-            }
+            onChange={() => toggle('avoidIntersections')}
           />
 
         </Section>
 
-
-        {/* ==================================================
-            APP
-        ================================================== */}
+        {/* APP */}
 
         <Section title="App">
 
           <Row
             label="Large text"
-            on={prefs.largeText}
-            onChange={() =>
-              toggle('largeText')
-            }
+            on={largeText}
+            onChange={() => setLargeText(!largeText)}
           />
 
           <Row
             label="High contrast"
             on={prefs.appHighContrast}
-            onChange={() =>
-              toggle('appHighContrast')
-            }
+            onChange={() => toggle('appHighContrast')}
           />
 
           <Row
             label="Voice guidance"
-            on={prefs.appVoice}
-            onChange={() =>
-              toggle('appVoice')
-            }
+            on={voiceGuidance}
+            onChange={() => setVoiceGuidance(!voiceGuidance)}
           />
 
         </Section>
 
-
-        {/* ==================================================
-            LOGOUT
-        ================================================== */}
+        {/* LOGOUT */}
 
         <div className="mt-6">
 
           <button
             onClick={logout}
-            className="
-              w-full
-              rounded-xl
-              border
-              border-red-200
-              bg-red-50
-              py-3
-              text-sm
-              font-bold
-              text-red-600
-              transition
-              hover:bg-red-100
-            "
+            className="w-full rounded-xl border border-red-200 bg-red-50 py-3 text-sm font-bold text-red-600 transition hover:bg-red-100"
           >
             Logout
           </button>
@@ -297,10 +246,7 @@ export default function Profile() {
 
       </div>
 
-
-      {/* ====================================================
-          BOTTOM NAVIGATION
-      ==================================================== */}
+      {/* BOTTOM NAVIGATION */}
 
       <BottomNav />
 
@@ -309,9 +255,7 @@ export default function Profile() {
 }
 
 
-// ============================================================
 // SECTION
-// ============================================================
 
 function Section({
   title,
@@ -336,9 +280,7 @@ function Section({
 }
 
 
-// ============================================================
 // TOGGLE ROW
-// ============================================================
 
 function Row({
   label,

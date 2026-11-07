@@ -423,15 +423,9 @@ function RouteMap({
         />
 
 <MapController
-  currentLocation={
-    currentLocation
-  }
-  destination={
-    destinationPoint
-  }
-  routeCoordinates={
-    routeCoordinates
-  }
+  currentLocation={currentLocation}
+  destination={destinationPoint}
+  routeCoordinates={routeCoordinates}
 />
 
         {currentLocation && (
@@ -520,6 +514,8 @@ console.log(
 export default function Routes() {
   const {
     destination,
+    startLocation,
+    setStartLocation,
     mode,
     selectedRoute,
     setSelectedRoute,
@@ -533,6 +529,15 @@ export default function Routes() {
     [number, number] | null
   >(null);
 
+  const routeOrigin = useMemo<[number, number] | null>(
+    () =>
+      startLocation
+        ? [startLocation.lat, startLocation.lng]
+        : currentLocation,
+    [startLocation, currentLocation],
+  );
+
+
   const [
     locationLoading,
     setLocationLoading,
@@ -542,6 +547,20 @@ export default function Routes() {
     locationError,
     setLocationError,
   ] = useState('');
+
+  const [startSearchQuery, setStartSearchQuery] = useState('');
+const [startSearchResults, setStartSearchResults] = useState<
+  {
+    id: string;
+    name: string;
+    displayName: string;
+    lat: number;
+    lng: number;
+    area: string;
+  }[]
+>([]);
+const [searchingStart, setSearchingStart] = useState(false);
+const [startSearchError, setStartSearchError] = useState('');
 
   const [
     backendRoutes,
@@ -847,6 +866,8 @@ return;
           'Unable to get current location:',
           error,
         );
+        console.log('LOCATION ERROR CODE:', error.code);
+console.log('LOCATION ERROR MESSAGE:', error.message);
 
         setLocationLoading(false);
 
@@ -865,6 +886,81 @@ return;
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const query = startSearchQuery.trim();
+  
+    if (query.length < 3) {
+      setStartSearchResults([]);
+      setStartSearchError('');
+      setSearchingStart(false);
+      return;
+    }
+  
+    const controller = new AbortController();
+  
+    const timeout = window.setTimeout(async () => {
+      try {
+        setSearchingStart(true);
+        setStartSearchError('');
+  
+        const url =
+          `https://nominatim.openstreetmap.org/search` +
+          `?format=jsonv2` +
+          `&q=${encodeURIComponent(query)}` +
+          `&limit=5` +
+          `&addressdetails=1`;
+  
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
+  
+        if (!response.ok) {
+          throw new Error('Location search failed');
+        }
+  
+        const data = await response.json();
+  
+        const results = data
+          .map((item: any) => ({
+            id: `osm-${item.place_id}`,
+            name: item.name || item.display_name.split(',')[0],
+            displayName: item.display_name,
+            lat: Number(item.lat),
+            lng: Number(item.lon),
+            area:
+              item.address?.suburb ||
+              item.address?.neighbourhood ||
+              item.address?.city ||
+              item.address?.town ||
+              'Location',
+          }))
+          .filter(
+            (item: any) =>
+              Number.isFinite(item.lat) &&
+              Number.isFinite(item.lng),
+          );
+  
+        setStartSearchResults(results);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+  
+        console.error('Start location search failed:', error);
+        setStartSearchError('Unable to search locations.');
+        setStartSearchResults([]);
+      } finally {
+        if (!controller.signal.aborted) {
+          setSearchingStart(false);
+        }
+      }
+    }, 500);
+  
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [startSearchQuery]);
 
   /*
    * -------------------------------------------------------
@@ -1026,9 +1122,7 @@ return;
     let cancelled = false;
 
     async function calculateRoute() {
-      if (!currentLocation) {
-        return;
-      }
+      if (!routeOrigin) return;
 
       if (!destinationPoint) {
         setRouteError(
@@ -1043,10 +1137,7 @@ return;
         setRouteError('');
         setOsrmRoutes([]);
 
-        const [
-          currentLat,
-          currentLng,
-        ] = currentLocation;
+        const [currentLat, currentLng] = routeOrigin;
 
         const [
           destinationLat,
@@ -1126,11 +1217,7 @@ setCurrentStepIndex(0);
     return () => {
       cancelled = true;
     };
-  }, [
-    currentLocation,
-    destinationPoint?.[0],
-    destinationPoint?.[1],
-  ]);
+  }, [routeOrigin, destinationPoint?.[0], destinationPoint?.[1]]);
 
   /*
    * -------------------------------------------------------
@@ -1319,35 +1406,118 @@ setCurrentStepIndex(0);
           HEADER
       ===================================================== */}
 
-      <div className="shrink-0 bg-white px-5 pb-4 pt-5 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-100">
-            {mode ===
-            'wheelchair' ? (
-              <Accessibility
-                size={25}
-                className="text-primary-700"
-              />
-            ) : (
-              <Eye
-                size={25}
-                className="text-primary-700"
-              />
-            )}
-          </div>
+<div className="shrink-0 bg-white px-5 pb-4 pt-5 shadow-sm">
+  <div className="flex items-center gap-3">
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-100">
+      {mode === 'wheelchair' ? (
+        <Accessibility size={25} className="text-primary-700" />
+      ) : (
+        <Eye size={25} className="text-primary-700" />
+      )}
+    </div>
 
-          <div className="min-w-0">
-            <h1 className="text-xl font-extrabold text-slate-900">
-              Choose a Route
-            </h1>
+    <div className="min-w-0">
+      <h1 className="text-xl font-extrabold text-slate-900">
+        Choose a Route
+      </h1>
+      <p className="truncate text-base text-slate-500">
+        {destination.name}
+      </p>
+    </div>
+  </div>
 
-            <p className="truncate text-base text-slate-500">
-              {destination.name}
-            </p>
-          </div>
-        </div>
+  {/* Starting and destination locations */}
+  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+    <div className="flex items-center gap-3">
+      <div className="flex h-3 w-3 shrink-0 rounded-full border-2 border-primary-600" />
+
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-semibold text-slate-500">
+          FROM
+        </p>
+
+        <p className="truncate text-sm font-bold text-slate-800">
+          {startLocation?.name || 'Your current location'}
+        </p>
       </div>
 
+      <button
+        type="button"
+        onClick={() => {
+          setStartLocation(null);
+          setStartSearchQuery('');
+          setStartSearchResults([]);
+          setStartSearchError('');
+        }}
+        className="shrink-0 text-xs font-bold text-primary-700"
+      >
+        Use GPS
+      </button>
+    </div>
+
+    <div className="ml-1.5 my-2 h-5 border-l-2 border-dashed border-slate-300" />
+
+    <div className="flex items-center gap-3">
+      <MapPin size={17} className="shrink-0 text-red-500" />
+
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-semibold text-slate-500">
+          TO
+        </p>
+        <p className="truncate text-sm font-bold text-slate-800">
+          {destination.name}
+        </p>
+      </div>
+    </div>
+
+    <div className="mt-3 border-t border-slate-200 pt-3">
+      <input
+        type="text"
+        value={startSearchQuery}
+        onChange={(e) => setStartSearchQuery(e.target.value)}
+        placeholder="Search another starting location"
+        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none focus:border-primary-500"
+      />
+
+      {searchingStart && (
+        <p className="mt-2 text-xs text-slate-500">
+          Searching locations...
+        </p>
+      )}
+
+      {startSearchError && (
+        <p className="mt-2 text-xs text-red-600">
+          {startSearchError}
+        </p>
+      )}
+
+      {startSearchResults.map((result) => (
+        <button
+          key={result.id}
+          type="button"
+          onClick={() => {
+            setStartLocation({
+              name: result.name,
+              lat: result.lat,
+              lng: result.lng,
+            });
+            setStartSearchQuery('');
+            setStartSearchResults([]);
+            setStartSearchError('');
+          }}
+          className="mt-2 flex w-full flex-col items-start rounded-xl bg-white p-3 text-left hover:bg-primary-50"
+        >
+          <span className="text-sm font-bold text-slate-800">
+            {result.name}
+          </span>
+          <span className="mt-1 text-xs text-slate-500">
+            {result.displayName}
+          </span>
+        </button>
+      ))}
+    </div>
+  </div>
+</div>
       {/* =====================================================
           SCROLLABLE CONTENT
       ===================================================== */}
@@ -1359,9 +1529,9 @@ setCurrentStepIndex(0);
 
         {destinationPoint ? (
           <RouteMap
-            currentLocation={
-              currentLocation
-            }
+          currentLocation={
+            routeOrigin
+          }
             destinationPoint={
               destinationPoint
             }
@@ -1534,11 +1704,9 @@ setCurrentStepIndex(0);
                                 }
                               />
 
-                              <span>
-                                {typeof feature === 'string'
-                                  ? feature
-                                  : feature.text}
-                              </span>
+<span>
+  {feature}
+</span>
                             </div>
                           ),
                         )}

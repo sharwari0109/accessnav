@@ -1,3 +1,4 @@
+
 import { useApp } from '@/store';
 import Button from '@/components/Button';
 import type { AccessibilityMode } from '@/types';
@@ -22,6 +23,8 @@ export default function Setup() {
   const {
     mode,
     setMode,
+    largeText,
+    setLargeText,
     go,
   } = useApp();
 
@@ -48,12 +51,7 @@ export default function Setup() {
   return (
     <div className="screen-enter flex h-full w-full flex-col bg-white">
 
-      {/* ==================================================
-          HEADER
-      ================================================== */}
-
       <div className="px-6 pb-4 pt-6">
-
         <h1 className="text-2xl font-extrabold text-slate-900">
           How should we personalize your route?
         </h1>
@@ -61,18 +59,12 @@ export default function Setup() {
         <p className="mt-2 text-sm text-slate-500">
           Choose what fits you best. You can change this anytime.
         </p>
-
       </div>
 
-
-      {/* ==================================================
-          ACCESSIBILITY MODES
-      ================================================== */}
+      {/* ACCESSIBILITY MODE CARDS */}
 
       <div className="flex gap-3 px-6">
-
         {cards.map((card) => {
-
           const selected = mode === card.id;
 
           return (
@@ -85,7 +77,6 @@ export default function Setup() {
                   : 'border-slate-200 bg-white'
               }`}
             >
-
               <span className="text-3xl">
                 {card.emoji}
               </span>
@@ -103,33 +94,67 @@ export default function Setup() {
               <p className="mt-1 text-xs text-slate-500">
                 {card.desc}
               </p>
-
             </button>
           );
-
         })}
-
       </div>
 
-
-      {/* ==================================================
-          PREFERENCES
-      ================================================== */}
+      {/* LARGE TEXT ACCESSIBILITY OPTION */}
 
       <div className="mt-6 px-6">
+        <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-4">
 
+          <div className="pr-3">
+            <h2 className="text-base font-bold text-slate-900">
+              Large Text
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-600">
+              Increase text size for better readability.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked={largeText}
+            aria-label="Large Text"
+            onClick={() => setLargeText(!largeText)}
+            className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
+              largeText
+                ? 'bg-primary-600'
+                : 'bg-slate-300'
+            }`}
+          >
+            <span
+              className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                largeText
+                  ? 'translate-x-7'
+                  : 'translate-x-1'
+              }`}
+            />
+          </button>
+
+        </div>
+
+        <p className="mt-2 text-right text-sm font-medium text-slate-600">
+          {largeText ? 'Large Text is ON' : 'Large Text is OFF'}
+        </p>
+      </div>
+
+      {/* USER PREFERENCES */}
+
+      <div className="mt-6 px-6">
         <h2 className="text-sm font-bold uppercase tracking-wide text-slate-400">
           Your preferences
         </h2>
 
         <div className="mt-3 space-y-2">
-
           {PREFS[mode].map((preference) => (
             <div
               key={preference}
               className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3"
             >
-
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accessible-500 text-white">
                 ✓
               </span>
@@ -137,21 +162,14 @@ export default function Setup() {
               <span className="text-sm font-medium text-slate-700">
                 {preference}
               </span>
-
             </div>
           ))}
-
         </div>
-
       </div>
 
+      {/* CONTINUE BUTTON */}
 
-      {/* ==================================================
-          CONTINUE
-      ================================================== */}
-
-      <div className="mt-auto px-6 pb-8">
-
+      <div className="mt-auto px-6 pb-8 pt-6">
         <Button
           fullWidth
           onClick={() => go('home')}
@@ -159,7 +177,6 @@ export default function Setup() {
         >
           Continue
         </Button>
-
       </div>
 
     </div>

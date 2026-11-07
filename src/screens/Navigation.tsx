@@ -7,6 +7,8 @@ import {
   type ReactNode,
 } from 'react';
 
+import { TextToSpeech } from '@capacitor-community/text-to-speech';
+
 import { useApp } from '@/store';
 import Overlay from '@/components/Overlay';
 import Button from '@/components/Button';
@@ -22,6 +24,8 @@ import {
   Check,
   Navigation as NavigationIcon,
   LocateFixed,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 
 import {
@@ -45,6 +49,16 @@ import 'leaflet/dist/leaflet.css';
 interface RoutePoint {
   lat: number;
   lng: number;
+}
+
+interface StartLocationSearchResult {
+  id: string;
+  name: string;
+  displayName: string;
+  lat: number;
+  lng: number;
+  area: string;
+  emoji: string;
 }
 
 interface OSRMManeuver {
@@ -188,7 +202,7 @@ function getInstructionText(step: OSRMStep): string {
 }
 
 function formatDistance(meters: number) {
-  if (!Number.isFinite(meters)) return '0 m';
+  if (!Number.isFinite(meters)) return 'Calculating...';
 
   if (meters < 1000) {
     return `${Math.max(0, Math.round(meters))} m`;
@@ -570,47 +584,66 @@ function createDestinationIcon() {
 function FollowRoute({
   currentLocation,
   enabled,
+  focusPoint,
   onUserMove,
 }: {
   currentLocation: RoutePoint | null;
   enabled: boolean;
+  focusPoint: RoutePoint | null;
   onUserMove: () => void;
 }) {
   const map = useMap();
 
-  // Dragging the map stops auto-follow until "Recenter" is tapped.
   useMapEvents({
     dragstart: () => onUserMove(),
   });
 
+  // Follow the live GPS location during navigation.
   useEffect(() => {
     if (!enabled || !currentLocation) {
       return;
     }
 
-    map.setView([currentLocation.lat, currentLocation.lng], 18, {
-      animate: true,
-      duration: 0.5,
-    });
+    map.setView(
+      [currentLocation.lat, currentLocation.lng],
+      18,
+      {
+        animate: true,
+        duration: 0.7,
+      }
+    );
   }, [currentLocation, enabled, map]);
+
+  // Focus the map on the selected next maneuver.
+  useEffect(() => {
+    if (!focusPoint) {
+      return;
+    }
+
+    map.flyTo(
+      [focusPoint.lat, focusPoint.lng],
+      18,
+      {
+        animate: true,
+        duration: 1,
+      }
+    );
+  }, [focusPoint, map]);
 
   return null;
 }
-
 function FitBounds({ bounds }: { bounds: L.LatLngBounds }) {
   const map = useMap();
 
   useEffect(() => {
     map.fitBounds(bounds, {
-      paddingTopLeft: [30, 110],
-      paddingBottomRight: [30, 380],
+      padding: [40, 40],
       animate: true,
     });
   }, [bounds, map]);
 
   return null;
 }
-
 function RouteLabel({
   position,
   text,
@@ -790,6 +823,8 @@ export default function Navigation() {
     paused,
     setPaused,
     go,
+    startLocation,
+    setStartLocation,
   } = useApp();
 
   const [currentLocation, setCurrentLocation] =
@@ -806,6 +841,26 @@ export default function Navigation() {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [following, setFollowing] = useState(true);
   const [heading, setHeading] = useState<number | null>(null);
+  // Start location selection
+  const [useLiveStart, setUseLiveStart] = useState(!startLocation);
+
+  const [customStartLocation, setCustomStartLocation] =
+    useState<RoutePoint | null>(
+      startLocation
+        ? { lat: startLocation.lat, lng: startLocation.lng }
+        : null,
+    );
+  
+  const [startLocationName, setStartLocationName] =
+    useState(startLocation?.name ?? '');
+
+const [startSearchQuery, setStartSearchQuery] =
+  useState('');
+
+  const [startSearchResults, setStartSearchResults] =
+  useState<StartLocationSearchResult[]>([]);
+  const [searchingStart, setSearchingStart] = useState(false);
+const [startSearchError, setStartSearchError] = useState('');
 
   const [currentStepIndex, setCurrentStepIndex] = useState(-1);
   const [measuredSpeed, setMeasuredSpeed] = useState<number | null>(null);
@@ -816,6 +871,7 @@ export default function Navigation() {
   const [loadingRoute, setLoadingRoute] = useState(true);
   const [error, setError] = useState('');
   const [arrived, setArrived] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
 
   const latestLocationRef = useRef<RoutePoint | null>(null);
   const hasRouteRef = useRef(false);
@@ -832,6 +888,9 @@ export default function Navigation() {
       lng: destination.lng,
     };
   }, [destination]);
+  const routeOrigin: RoutePoint | null = useLiveStart
+  ? currentLocation
+  : customStartLocation;
 
   // The old 'walking' option is gone: anything that isn't vehicle is wheelchair.
   const activeMode: ModeKey = travelMode === 'vehicle' ? 'vehicle' : 'wheelchair';
@@ -1006,6 +1065,84 @@ export default function Navigation() {
       navigator.geolocation.clearWatch(watchId);
     };
   }, []);
+
+  useEffect(() => {
+    const query = startSearchQuery.trim();
+  
+    if (query.length < 3) {
+      setStartSearchResults([]);
+      setStartSearchError('');
+      setSearchingStart(false);
+      return;
+    }
+  
+    const controller = new AbortController();
+  
+    const timeout = window.setTimeout(async () => {
+      try {
+        setSearchingStart(true);
+        setStartSearchError('');
+  
+        const url =
+          `https://nominatim.openstreetmap.org/search` +
+          `?format=jsonv2` +
+          `&q=${encodeURIComponent(query)}` +
+          `&limit=5` +
+          `&addressdetails=1`;
+  
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+          },
+        });
+  
+        if (!response.ok) {
+          throw new Error('Location search failed');
+        }
+  
+        const data = await response.json();
+  
+        const results: StartLocationSearchResult[] = data
+          .map((item: any) => ({
+            id: `osm-${item.place_id}`,
+            name: item.name || item.display_name.split(',')[0],
+            displayName: item.display_name,
+            lat: Number(item.lat),
+            lng: Number(item.lon),
+            area:
+              item.address?.suburb ||
+              item.address?.neighbourhood ||
+              item.address?.city ||
+              item.address?.town ||
+              'Location',
+            emoji: '📍',
+          }))
+          .filter(
+            (item: StartLocationSearchResult) =>
+              Number.isFinite(item.lat) &&
+              Number.isFinite(item.lng)
+          );
+  
+        setStartSearchResults(results);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+  
+        console.error('Start location search failed:', err);
+        setStartSearchError('Unable to search locations.');
+        setStartSearchResults([]);
+      } finally {
+        if (!controller.signal.aborted) {
+          setSearchingStart(false);
+        }
+      }
+    }, 500);
+  
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [startSearchQuery]);
 
   /*
    * ------------------------------------------------------------
@@ -1183,13 +1320,12 @@ export default function Navigation() {
    */
 
   useEffect(() => {
-    if (!currentLocation || !destinationPoint || hasRouteRef.current) {
+    if (!routeOrigin || !destinationPoint || hasRouteRef.current) {
       return;
     }
-
-    fetchRoutes(currentLocation, true);
-  }, [currentLocation, destinationPoint, fetchRoutes]);
-
+  
+    fetchRoutes(routeOrigin, true);
+  }, [routeOrigin, destinationPoint, fetchRoutes]);
   /*
    * ------------------------------------------------------------
    * UPDATE CURRENT TURN INSTRUCTION
@@ -1215,35 +1351,41 @@ export default function Navigation() {
      */
     while (stepIndex >= 0 && stepIndex < routeSteps.length) {
       const step = routeSteps[stepIndex];
-      const maneuverLocation = step.maneuver?.location;
-
-      if (!maneuverLocation) {
-        break;
-      }
-
-      const distance = haversineDistance(currentLocation, {
-        lat: maneuverLocation[1],
-        lng: maneuverLocation[0],
-      });
-
-      setNextStepDistance(distance);
-
-      if (distance > 35) {
-        break;
-      }
-
+    
       if (step.maneuver.type === 'arrive') {
+        setNextStepDistance(0);
         setArrived(true);
         break;
       }
-
+    
       const nextIndex = stepIndex + 1;
-
+    
       if (nextIndex >= routeSteps.length) {
         setArrived(true);
         break;
       }
-
+    
+      const nextManeuverLocation =
+        routeSteps[nextIndex].maneuver?.location;
+    
+      if (!nextManeuverLocation) {
+        break;
+      }
+    
+      const distance = haversineDistance(currentLocation, {
+        lat: nextManeuverLocation[1],
+        lng: nextManeuverLocation[0],
+      });
+    
+      setNextStepDistance(distance);
+      console.log('Navigation distance:', distance);
+console.log('Current step index:', stepIndex);
+console.log('Current GPS:', currentLocation);
+    
+      if (distance > 35) {
+        break;
+      }
+    
       stepIndex = nextIndex;
       setCurrentStepIndex(stepIndex);
     }
@@ -1269,6 +1411,66 @@ export default function Navigation() {
 
   /*
    * ------------------------------------------------------------
+   * AUTOMATIC VOICE GUIDANCE
+   * ------------------------------------------------------------
+   */
+
+  useEffect(() => {
+    if (phase !== 'navigating' || paused || !voiceEnabled) {
+      void TextToSpeech.stop().catch((error) => {
+        console.warn('Could not stop voice guidance:', error);
+      });
+      return;
+    }
+
+    const step = currentStepIndex >= 0
+      ? routeSteps[currentStepIndex]
+      : null;
+
+    if (!arrived && !step) {
+      return;
+    }
+
+    const instruction = arrived
+      ? `You have arrived at ${destination?.name ?? 'your destination'}.`
+      : `${maneuverTitle(step!)}${
+          step!.name && step!.name.trim()
+            ? ` onto ${step!.name.trim()}`
+            : ''
+        }.`;
+
+    const speakInstruction = async () => {
+      try {
+        await TextToSpeech.stop();
+        await TextToSpeech.speak({
+          text: instruction,
+          lang: 'en-IN',
+          rate: 0.9,
+          pitch: 1.0,
+          volume: 1.0,
+        });
+      } catch (error) {
+        console.error('Voice guidance error:', error);
+      }
+    };
+
+    void speakInstruction();
+
+    return () => {
+      void TextToSpeech.stop().catch(() => {});
+    };
+  }, [
+    phase,
+    paused,
+    voiceEnabled,
+    currentStepIndex,
+    routeSteps,
+    arrived,
+    destination?.name,
+  ]);
+
+  /*
+   * ------------------------------------------------------------
    * OFF-ROUTE DETECTION
    * ------------------------------------------------------------
    *
@@ -1278,6 +1480,7 @@ export default function Navigation() {
 
   useEffect(() => {
     if (
+      !useLiveStart ||
       phase !== 'navigating' ||
       paused ||
       arrived ||
@@ -1325,18 +1528,15 @@ export default function Navigation() {
    */
 
   const recalculate = () => {
-    const location = latestLocationRef.current;
-
-    if (!location || !destinationPoint) {
+    if (!routeOrigin || !destinationPoint) {
       return;
     }
-
+  
     hasRouteRef.current = false;
     setError('');
-
-    fetchRoutes(location, true);
+  
+    fetchRoutes(routeOrigin, true);
   };
-
   /*
    * ------------------------------------------------------------
    * DESTINATION VALIDATION
@@ -1558,10 +1758,18 @@ export default function Navigation() {
           className="h-full w-full"
         >
           <FollowRoute
-            currentLocation={currentLocation}
-            enabled={!isPreview && following}
-            onUserMove={() => setFollowing(false)}
-          />
+  currentLocation={currentLocation}
+  enabled={!isPreview && following}
+  focusPoint={
+    currentStep?.maneuver?.location
+      ? {
+          lat: currentStep.maneuver.location[1],
+          lng: currentStep.maneuver.location[0],
+        }
+      : null
+  }
+  onUserMove={() => setFollowing(false)}
+/>
 
           {isPreview && previewBounds && <FitBounds bounds={previewBounds} />}
 
@@ -1701,70 +1909,33 @@ export default function Navigation() {
           NEXT TURN CARD (navigating only)
       ====================================================== */}
 
+      {/* COMPACT NEXT TURN CARD */}
       {!isPreview && (
-        <div className="absolute inset-x-4 top-36 z-20">
-          <div className="rounded-3xl bg-white p-4 shadow-sheet">
-            <div className="flex items-center gap-4">
-              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-primary-600 text-4xl font-black text-white">
-                {arrived ? '✓' : currentStep ? maneuverSymbol(currentStep) : '↑'}
-              </div>
+  <div className="absolute inset-x-4 top-32 z-20 flex justify-center">
+    <div className="flex items-center gap-3 rounded-2xl bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-600 text-xl font-black text-white">
+        {arrived ? '✓' : currentStep ? maneuverSymbol(currentStep) : '↑'}
+      </div>
 
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold uppercase tracking-wide text-primary-600">
-                  {arrived ? 'Destination' : 'Next instruction'}
-                </p>
-
-                <p className="mt-0.5 text-xl font-extrabold leading-tight text-slate-900">
-                  {instructionTitle}
-                </p>
-
-                {!arrived && (
-                  <p className="mt-1 truncate text-sm font-semibold text-slate-500">
-                    {instructionStreet}
-                  </p>
-                )}
-              </div>
-
-              {!arrived && (
-                <div className="shrink-0 text-right">
-                  <p className="text-2xl font-black text-slate-900">
-                    {formatDistance(instructionDistance)}
-                  </p>
-
-                  <p className="text-[10px] font-bold uppercase text-slate-400">
-                    from turn
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {!arrived && remainingSeconds !== null && (
-              <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                <span className="text-sm font-extrabold text-slate-900">
-                  {formatDuration(remainingSeconds)} left ·{' '}
-                  {formatDistance(remainingMeters ?? 0)}
-                </span>
-
-                <span className="text-sm font-semibold text-slate-500">
-                  Arrive {arrivalClock}
-                </span>
-              </div>
-            )}
-
-            {loadingRoute && routeCoordinates.length > 0 && (
-              <div className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-center text-xs font-semibold text-blue-700">
-                Recalculating route...
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <div>
+        <p className="text-sm font-extrabold text-slate-900">
+          {instructionTitle}
+        </p>
+        <p className="text-xs font-semibold text-slate-500">
+          {arrived
+            ? 'Destination reached'
+            : formatDistance(instructionDistance)}
+        </p>
+      </div>
+    </div>
+  </div>
+)}
 
       {/* ======================================================
           BOTTOM SHEET
       ====================================================== */}
 
-      <div className="absolute inset-x-0 bottom-0 z-30 flex max-h-[60%] flex-col">
+<div className="absolute inset-x-0 bottom-0 z-30 flex max-h-[45%] flex-col">
         {/* Recenter (after the user drags the map while navigating) */}
         {!isPreview && !following && (
           <button
@@ -1777,11 +1948,136 @@ export default function Navigation() {
           </button>
         )}
 
-        <div className="overflow-y-auto rounded-t-3xl bg-white p-5 pb-6 shadow-sheet">
+<div className="overflow-y-auto rounded-t-3xl bg-white px-3 py-2 pb-3 shadow-sheet">
           <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-slate-200" />
 
           {isPreview ? (
             <>
+
+            {/* START LOCATION */}
+
+<div className="mb-4">
+  <p className="mb-2 text-sm font-bold text-slate-800">
+    Starting location
+  </p>
+
+  <button
+  type="button"
+  onClick={() => {
+    setUseLiveStart(true);
+    setCustomStartLocation(null);
+
+    setRoutes({
+      vehicle: [],
+      wheelchair: [],
+    });
+
+    setStartLocationName('');
+    setStartSearchQuery('');
+    setStartSearchResults([]);
+    hasRouteRef.current = false;
+  }}
+    className={`mb-2 w-full rounded-xl border-2 p-3 text-left ${
+      useLiveStart
+        ? 'border-primary-600 bg-primary-50'
+        : 'border-slate-200 bg-white'
+    }`}
+  >
+    <p className="text-sm font-bold text-slate-800">
+      📍 Use my current location
+    </p>
+    <p className="text-xs text-slate-500">
+      {loadingLocation
+        ? 'Getting your location...'
+        : currentLocation
+          ? 'Use live GPS location'
+          : 'Current location unavailable'}
+    </p>
+  </button>
+
+  <button
+    type="button"
+    onClick={() => {
+      setUseLiveStart(false);
+      setRoutes({
+        vehicle: [],
+        wheelchair: [],
+      });
+      hasRouteRef.current = false;
+    }}
+    className={`mb-2 w-full rounded-xl border-2 p-3 text-left ${
+      !useLiveStart
+        ? 'border-primary-600 bg-primary-50'
+        : 'border-slate-200 bg-white'
+    }`}
+  >
+    <p className="text-sm font-bold text-slate-800">
+      🗺️ Choose another starting location
+    </p>
+    {startLocationName && (
+      <p className="mt-1 text-xs text-slate-500">
+        Selected: {startLocationName}
+      </p>
+    )}
+  </button>
+
+  {!useLiveStart && (
+    <>
+      <input
+        type="text"
+        value={startSearchQuery}
+        onChange={(e) => setStartSearchQuery(e.target.value)}
+        placeholder="Search starting location..."
+        className="w-full rounded-xl border border-slate-300 px-3 py-3 text-sm outline-none focus:border-primary-600"
+      />
+
+      {searchingStart && (
+        <p className="mt-2 text-xs text-slate-500">
+          Searching locations...
+        </p>
+      )}
+
+      {startSearchError && (
+        <p className="mt-2 text-xs text-red-600">
+          {startSearchError}
+        </p>
+      )}
+
+      <div className="mt-2 space-y-2">
+        {startSearchResults.map((result) => (
+          <button
+            key={result.id}
+            type="button"
+            onClick={() => {
+              setCustomStartLocation({
+                lat: result.lat,
+                lng: result.lng,
+              });
+              setStartLocationName(result.displayName);
+              setStartSearchQuery('');
+              setStartSearchResults([]);
+              hasRouteRef.current = false;
+            }}
+            className="w-full rounded-xl border border-slate-200 bg-white p-3 text-left"
+          >
+            <p className="text-sm font-bold text-slate-800">
+              📍 {result.name}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {result.displayName}
+            </p>
+          </button>
+        ))}
+      </div>
+
+      {!customStartLocation && (
+        <p className="mt-2 text-xs font-medium text-amber-600">
+          Search and select a starting location to calculate your route.
+        </p>
+      )}
+    </>
+  )}
+</div>
               {/* MODE: CAR vs WHEELCHAIR */}
 
               <p className="mb-2 text-sm font-bold text-slate-800">
@@ -1941,18 +2237,20 @@ export default function Navigation() {
               </p>
 
               <button
-                type="button"
-                disabled={!activeRoute}
-                onClick={() => {
-                  setFollowing(true);
-                  setPhase('navigating');
-                }}
-                className="mt-4 w-full rounded-2xl bg-primary-600 px-4 py-4 text-base font-extrabold text-white shadow-sm disabled:opacity-50"
-              >
-                {activeRoute
-                  ? `Start navigation · ${formatDuration(activeRoute.duration)}`
-                  : 'Route unavailable for this mode'}
-              </button>
+  type="button"
+  disabled={!activeRoute || !routeOrigin || loadingRoute}
+  onClick={() => {
+    setFollowing(useLiveStart);
+    setPhase('navigating');
+  }}
+  className="mt-4 w-full rounded-2xl bg-primary-600 px-4 py-4 text-base font-extrabold text-white shadow-sm disabled:opacity-50"
+>
+  {loadingRoute
+    ? 'Calculating route...'
+    : activeRoute
+      ? `Start navigation · ${formatDuration(activeRoute.duration)}`
+      : 'Route unavailable for this mode'}
+</button>
             </>
           ) : (
             <>
@@ -1981,90 +2279,140 @@ export default function Navigation() {
               </div>
 
               {currentStep && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (currentStepIndex < routeSteps.length - 1) {
-                      setCurrentStepIndex(currentStepIndex + 1);
-                    }
-                  }}
-                  disabled={currentStepIndex >= routeSteps.length - 1}
-                  className="mt-4 w-full rounded-2xl bg-primary-600 px-4 py-3.5 text-sm font-extrabold text-white shadow-sm disabled:opacity-50"
-                >
-                  {currentStepIndex < routeSteps.length - 1
-                    ? 'Next step →'
-                    : 'Final step'}
-                </button>
-              )}
+  <button
+    type="button"
+    onClick={() => {
+      if (currentStepIndex < routeSteps.length - 1) {
+        setFollowing(false);
+        setCurrentStepIndex(currentStepIndex + 1);
+      }
+    }}
+    disabled={currentStepIndex >= routeSteps.length - 1}
+    className="mt-4 w-full rounded-2xl bg-primary-600 px-4 py-3.5 text-sm font-extrabold text-white shadow-sm disabled:opacity-50"
+  >
+    {currentStepIndex < routeSteps.length - 1
+      ? 'Next step →'
+      : 'Final step'}
+  </button>
+)}
 
               {/* ACCESSIBILITY STATUS */}
 
-              <div className="mt-3 flex items-center gap-3 rounded-2xl bg-accessible-50 p-3">
-                <span className="text-xl">
-                  {mode === 'wheelchair' ? '♿' : '👁'}
-                </span>
+              <div className="mt-2 flex items-center gap-2 rounded-xl bg-accessible-50 px-3 py-2">
+  <span className="text-lg">
+    {mode === 'wheelchair' ? '♿' : '👁'}
+  </span>
 
-                <p className="flex-1 text-sm font-semibold text-accessible-800">
-                  {mode === 'wheelchair'
-                    ? 'Wheelchair mode is active. Accessibility information will be used to identify potential obstacles and accessible features for this destination.'
-                    : 'Low-vision mode is active. Use the high-contrast map and voice guidance features where available.'}
-                </p>
+  <p className="flex-1 text-xs font-semibold leading-snug text-accessible-800">
+    {mode === 'wheelchair'
+      ? 'Wheelchair mode is active. Accessibility information will be used to identify potential obstacles and accessible features for this destination.'
+      : 'Low-vision mode is active. Use the high-contrast map and voice guidance features where available.'}
+  </p>
+</div>
+
+              {/* VOICE GUIDANCE CONTROLS */}
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setVoiceEnabled((enabled) => !enabled)}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-primary-50 px-3 py-3 text-sm font-bold text-primary-700"
+                  aria-pressed={voiceEnabled}
+                >
+                  {voiceEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                  {voiceEnabled ? 'Mute Voice' : 'Enable Voice'}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!voiceEnabled || paused}
+                  onClick={async () => {
+                    const step = currentStepIndex >= 0
+                      ? routeSteps[currentStepIndex]
+                      : null;
+                    const instruction = arrived
+                      ? `You have arrived at ${destination.name}.`
+                      : step
+                        ? `${maneuverTitle(step)}${
+                            step.name && step.name.trim()
+                              ? ` onto ${step.name.trim()}`
+                              : ''
+                          }.`
+                        : 'Continue on your route.';
+
+                    try {
+                      await TextToSpeech.stop();
+                      await TextToSpeech.speak({
+                        text: instruction,
+                        lang: 'en-IN',
+                        rate: 0.9,
+                        pitch: 1.0,
+                        volume: 1.0,
+                      });
+                    } catch (error) {
+                      console.error('Could not repeat instruction:', error);
+                    }
+                  }}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 py-3 text-sm font-bold text-slate-700 disabled:opacity-50"
+                >
+                  <RefreshCw size={18} />
+                  Repeat
+                </button>
               </div>
 
               {/* ACTION BUTTONS */}
 
-              <div className="mt-4 grid grid-cols-4 gap-2">
-                <NavAction
-                  icon={paused ? <Play size={18} /> : <Pause size={18} />}
-                  label={paused ? 'Resume' : 'Pause'}
-                  onClick={() => setPaused(!paused)}
-                />
+              <div className="mt-2 grid grid-cols-4 gap-2">
+  <NavAction
+    icon={paused ? <Play size={16} /> : <Pause size={16} />}
+    label={paused ? 'Resume' : 'Pause'}
+    onClick={() => setPaused(!paused)}
+  />
 
-                <NavAction
-                  icon={<RefreshCw size={18} />}
-                  label="Recalc"
-                  onClick={recalculate}
-                />
+  <NavAction
+    icon={<RefreshCw size={16} />}
+    label="Recalc"
+    onClick={recalculate}
+  />
 
-                <NavAction
-                  icon={<FileText size={18} />}
-                  label="Details"
-                  onClick={() => go('details')}
-                />
+  <NavAction
+    icon={<FileText size={16} />}
+    label="Details"
+    onClick={() => go('details')}
+  />
 
-                <NavAction
-                  icon={<AlertTriangle size={18} />}
-                  label="Report"
-                  onClick={() => go('report')}
-                />
-              </div>
+  <NavAction
+    icon={<AlertTriangle size={16} />}
+    label="Report"
+    onClick={() => go('report')}
+  />
+</div>
 
-              <button
-                type="button"
-                onClick={() => setPhase('preview')}
-                className="mt-3 w-full rounded-2xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700"
-              >
-                Change route or travel mode
-              </button>
+<button
+  type="button"
+  onClick={() => setPhase('preview')}
+  className="mt-2 w-full rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700"
+>
+  Change route or travel mode
+</button>
 
-              {paused && (
-                <div className="mt-3 rounded-2xl bg-primary-50 px-4 py-3 text-center">
-                  <p className="text-sm font-bold text-primary-700">
-                    Navigation paused
-                  </p>
+{paused && (
+  <div className="mt-2 rounded-xl bg-primary-50 px-3 py-2 text-center">
+    <p className="text-xs font-bold text-primary-700">
+      Navigation paused
+    </p>
+    <p className="text-[10px] text-primary-600">
+      GPS tracking remains active.
+    </p>
+  </div>
+)}
 
-                  <p className="mt-1 text-xs text-primary-600">
-                    GPS tracking remains active.
-                  </p>
-                </div>
-              )}
-
-              {arrived && (
-                <div className="mt-3 flex items-center justify-center gap-2 rounded-2xl bg-accessible-50 py-3 text-sm font-bold text-accessible-700">
-                  <Check size={16} strokeWidth={3} />
-                  You have arrived
-                </div>
-              )}
+{arrived && (
+  <div className="mt-2 flex items-center justify-center gap-2 rounded-xl bg-accessible-50 py-2 text-xs font-bold text-accessible-700">
+    <Check size={14} strokeWidth={3} />
+    You have arrived
+  </div>
+)}
             </>
           )}
         </div>

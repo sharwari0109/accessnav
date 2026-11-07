@@ -252,13 +252,53 @@ export async function getPlaceAccessibility(
 }
 
 
+
 // ============================================================
 // SAVED PLACES
 // ============================================================
 
-export async function getSavedPlaces() {
+export interface SavedPlace {
+  id: string;
+  name: string;
+  address: string;
+  emoji: string;
+  placeId: string | null;
+  latitude: number;
+  longitude: number;
+  createdAt?: string;
+  place: import('@/types').Place | null;
+}
+
+// Get saved places
+export async function getSavedPlaces(): Promise<SavedPlace[]> {
   return apiFetch("/api/saved");
 }
+
+// Save a place
+export async function savePlace(data: {
+  placeId?: string | null;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  emoji?: string;
+}) {
+  return apiFetch('/api/saved', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// Remove a saved place
+export async function deleteSavedPlace(savedId: string) {
+  return apiFetch(
+    `/api/saved/${encodeURIComponent(savedId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+}
+
 
 
 // ============================================================
@@ -533,11 +573,13 @@ export async function getReportOptions() {
 
 
 export interface ReportRequest {
-  placeId: string;
+  placeId?: string | null;
+  placeName: string;
+  latitude: number;
+  longitude: number;
   reportType: string;
   description?: string;
 }
-
 
 export async function submitReport(
   report: ReportRequest
@@ -550,7 +592,25 @@ export async function submitReport(
     }
   );
 }
+export interface NearbyReport {
+  id: string;
+  placeName: string;
+  latitude: number;
+  longitude: number;
+  reportType: string;
+  description: string;
+  status: string;
+  createdAt: string;
+}
 
+export async function getNearbyReports(
+  latitude: number,
+  longitude: number
+): Promise<NearbyReport[]> {
+  return apiFetch(
+    `/api/reports/nearby?latitude=${latitude}&longitude=${longitude}&radius_km=0.5`
+  );
+}
 
 export async function getReports() {
   return apiFetch("/api/reports");

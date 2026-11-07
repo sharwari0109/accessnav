@@ -91,7 +91,10 @@ class LoginRequest(BaseModel):
 
 
 class ReportRequest(BaseModel):
-    placeId: str
+    placeId: Optional[str] = None
+    placeName: str = Field(..., min_length=1)
+    latitude: float
+    longitude: float
     reportType: str
     description: str = ""
 
@@ -1379,40 +1382,106 @@ def debug_places():
 def get_saved_places(
     current_user=Depends(get_current_user),
 ):
-
     saved_places = list(
         saved_collection.find(
-            {
-                "userId": current_user["id"]
-            },
-            {
-                "_id": 0
-            },
+            {"userId": current_user["id"]},
+            {"_id": 0},
         )
     )
 
     result = []
 
     for saved in saved_places:
+        place = None
 
-        place = places_collection.find_one(
-            {
-                "id": saved["placeId"]
-            },
-            {
-                "_id": 0
-            },
-        )
-
-        if place:
-            result.append(
-                {
-                    **saved,
-                    "place": place,
-                }
+        if saved.get("placeId"):
+            place = places_collection.find_one(
+                {"id": saved["placeId"]},
+                {"_id": 0},
             )
 
+        result.append({
+            **saved,
+            "place": place,
+        })
+
     return result
+# ============================================================
+# SAVE A PLACE
+# ============================================================
+
+class SavePlaceRequest(BaseModel):
+    placeId: Optional[str] = None
+    name: str = Field(..., min_length=1)
+    address: str = ""
+    latitude: float
+    longitude: float
+    emoji: str = "📍"
+
+@app.post("/api/saved")
+def save_place(
+    request: SavePlaceRequest,
+    current_user=Depends(get_current_user),
+):
+    saved = {
+        "id": str(uuid.uuid4()),
+        "userId": current_user["id"],
+        "placeId": request.placeId,
+        "name": request.name,
+        "address": request.address,
+        "latitude": request.latitude,
+        "longitude": request.longitude,
+        "emoji": request.emoji,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+    existing_query = {
+        "userId": current_user["id"],
+        "latitude": request.latitude,
+        "longitude": request.longitude,
+    }
+
+    existing = saved_collection.find_one(existing_query)
+
+    if existing:
+        return {
+            "message": "Place already saved",
+            "id": existing["id"],
+        }
+
+    saved_collection.insert_one(saved)
+
+    return {
+        "message": "Place saved successfully",
+        "id": saved["id"],
+        "placeId": saved["placeId"],
+    }
+
+# ============================================================
+# REMOVE A SAVED PLACE
+# ============================================================
+
+@app.delete("/api/saved/{saved_id}")
+def delete_saved_place(
+    saved_id: str,
+    current_user=Depends(get_current_user),
+):
+    result = saved_collection.delete_one({
+        "id": saved_id,
+        "userId": current_user["id"],
+    })
+
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="Saved place not found",
+        )
+
+    return {
+        "message": "Place removed successfully"
+    }
+
+
 
 
 # ============================================================
@@ -1596,30 +1665,35 @@ def create_report(
     report: ReportRequest,
     current_user=Depends(get_current_user),
 ):
-
     new_report = {
         "userId": current_user["id"],
         "placeId": report.placeId,
+        "placeName": report.placeName,
+        "latitude": report.latitude,
+        "longitude": report.longitude,
         "reportType": report.reportType,
         "description": report.description,
+        "status": "pending",
+        "createdAt": datetime.now(timezone.utc).isoformat(),
     }
 
-    result = reports_collection.insert_one(
-        new_report
-    )
+    result = reports_collection.insert_one(new_report)
 
     return {
         "message": "Report submitted successfully",
         "report": {
             "id": str(result.inserted_id),
-            "userId": current_user["id"],
-            "placeId": report.placeId,
-            "reportType": report.reportType,
-            "description": report.description,
+            "userId": str(new_report["userId"]),
+            "placeId": new_report["placeId"],
+            "placeName": new_report["placeName"],
+            "latitude": new_report["latitude"],
+            "longitude": new_report["longitude"],
+            "reportType": new_report["reportType"],
+            "description": new_report["description"],
+            "status": new_report["status"],
+            "createdAt": new_report["createdAt"],
         },
     }
-
-
 @app.get("/api/reports")
 def get_reports(
     current_user=Depends(get_current_user),
@@ -1637,3 +1711,44 @@ def get_reports(
     )
 
     return reports
+
+@app.get("/api/reports/nearby")
+def get_nearby_reports(
+    latitude: float = Query(...),
+    longitude: float = Query(...),
+    radius_km: float = Query(0.5),
+    current_user=Depends(get_current_user),
+):
+    lat_delta = radius_km / 111
+
+    import math
+    lng_delta = radius_km / (
+        111 * max(math.cos(math.radians(latitude)), 0.01)
+    )
+
+    reports = list(
+        reports_collection.find({
+            "latitude": {
+                "$gte": latitude - lat_delta,
+                "$lte": latitude + lat_delta,
+            },
+            "longitude": {
+                "$gte": longitude - lng_delta,
+                "$lte": longitude + lng_delta,
+            },
+        })
+    )
+
+    return [
+        {
+            "id": str(report["_id"]),
+            "placeName": report.get("placeName", ""),
+            "latitude": report["latitude"],
+            "longitude": report["longitude"],
+            "reportType": report.get("reportType", ""),
+            "description": report.get("description", ""),
+            "status": report.get("status", "pending"),
+            "createdAt": report.get("createdAt", ""),
+        }
+        for report in reports
+    ]

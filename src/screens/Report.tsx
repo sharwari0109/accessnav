@@ -89,19 +89,20 @@ export default function Report() {
        * If the user came from a destination screen,
        * send that place ID.
        *
-       * If no destination is selected, use a temporary
-       * "unknown" value.
        */
-      const placeId =
-        destination?.id ?? 'unknown';
-
-
+      if (!destination) {
+        setError('Please select a location before submitting a report.');
+        return;
+      }
+      
       const response = await submitReport({
-        placeId: placeId,
+        placeId: destination.place?.id ?? null,
+        placeName: destination.name,
+        latitude: destination.lat,
+        longitude: destination.lng,
         reportType: selected,
         description: desc,
       });
-
 
       console.log(
         'Report submitted successfully:',
