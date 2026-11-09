@@ -767,7 +767,7 @@ const [loadingReports, setLoadingReports] =
         dragging
         doubleClickZoom
         touchZoom
-        zoomControl
+        zoomControl={false}
         className={`h-full w-full ${
           highContrast
             ? 'contrast-125 saturate-150'
@@ -791,144 +791,7 @@ const [loadingReports, setLoadingReports] =
             Accessibility points
         ------------------------------------------------- */}
 
-        {visiblePlaces.map((place) => {
-          let markerType:
-            | 'ramp'
-            | 'elevator'
-            | 'entrance'
-            | 'crossing'
-            | 'warning'
-            | 'place' = 'place';
-
-          if (place.obstruction) {
-            markerType = 'warning';
-          } else if (place.ramp) {
-            markerType = 'ramp';
-          } else if (place.elevator) {
-            markerType = 'elevator';
-          } else if (
-            place.accessibleEntrance
-          ) {
-            markerType = 'entrance';
-          } else if (
-            place.clearCrossing
-          ) {
-            markerType = 'crossing';
-          }
-
-          const style =
-            getMarkerStyle(
-              markerType,
-              mode,
-            );
-
-          return (
-            <CircleMarker
-              key={place.id}
-              center={place.position}
-              radius={style.radius}
-              pathOptions={{
-                color: style.color,
-                fillColor:
-                  style.fillColor,
-                fillOpacity: 0.95,
-                weight:
-                  mode ===
-                  'lowvision'
-                    ? 5
-                    : 3,
-              }}
-            >
-              <Popup>
-                <div
-                  style={{
-                    minWidth:
-                      mode ===
-                      'lowvision'
-                        ? 230
-                        : 180,
-
-                    fontSize:
-                      mode ===
-                      'lowvision'
-                        ? 17
-                        : 14,
-
-                    lineHeight: 1.55,
-                  }}
-                >
-                  <strong>
-                    {place.name}
-                  </strong>
-
-                  <br />
-
-                  <span>
-                    {place.area}
-                  </span>
-
-                  <div
-                    style={{
-                      marginTop: 8,
-                      fontWeight: 700,
-                    }}
-                  >
-                    {place.ramp &&
-                      '♿ Ramp available'}
-
-                    {place.elevator &&
-                      ' 🛗 Elevator available'}
-
-                    {place.accessibleEntrance &&
-                      ' 🚪 Step-free entrance'}
-
-                    {place.clearCrossing &&
-                      ' 🚸 Clear crossing'}
-
-                    {place.obstruction &&
-                      ' ⚠️ Accessibility warning'}
-                  </div>
-
-                  {place.warnings.length >
-                    0 && (
-                    <div
-                      style={{
-                        marginTop: 6,
-                      }}
-                    >
-                      {place.warnings.map(
-                        (warning) => (
-                          <div
-                            key={warning}
-                          >
-                            ⚠️ {warning}
-                          </div>
-                        ),
-                      )}
-                    </div>
-                  )}
-
-                  {place.tags.length >
-                    0 && (
-                    <div
-                      style={{
-                        marginTop: 8,
-                        color:
-                          '#475569',
-                      }}
-                    >
-                      {place.tags
-                        .slice(0, 5)
-                        .join(
-                          ' • ',
-                        )}
-                    </div>
-                  )}
-                </div>
-              </Popup>
-            </CircleMarker>
-          );
-        })}   
+         
         {/* -------------------------------------------------
     Community-reported issues
 ------------------------------------------------- */}
@@ -1138,50 +1001,13 @@ const [loadingReports, setLoadingReports] =
         )}
       </MapContainer>
 
-      {/* ---------------------------------------------------
-          Mode indicator
-      --------------------------------------------------- */}
+      
+{/* ---------------------------------------------------
+    Mode indicator
+--------------------------------------------------- */}
 
-      <div
-        className="pointer-events-none absolute left-3 top-3 rounded-2xl bg-white/95 px-4 py-3 shadow-xl"
-        style={{
-          zIndex: 30,
 
-          border:
-            mode ===
-            'lowvision'
-              ? '3px solid #111827'
-              : '2px solid #e2e8f0',
-        }}
-      >
-        <div
-          className={
-            mode ===
-            'lowvision'
-              ? 'text-lg font-extrabold text-slate-950'
-              : 'text-sm font-bold text-slate-900'
-          }
-        >
-          {mode ===
-          'wheelchair'
-            ? '♿ Wheelchair Mode'
-            : '👁 Low Vision Mode'}
-        </div>
 
-        <div
-          className={
-            mode ===
-            'lowvision'
-              ? 'mt-1 text-sm font-semibold text-slate-700'
-              : 'mt-1 text-xs text-slate-500'
-          }
-        >
-          {mode ===
-          'wheelchair'
-            ? 'Ramps • Elevators • Step-free'
-            : 'High contrast • Clear crossings'}
-        </div>
-      </div>
 
       {/* ---------------------------------------------------
           Backend loading indicator
