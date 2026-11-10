@@ -6,6 +6,7 @@ export type ScreenName =
   | 'setup'
   | 'home'
   | 'search'
+  | 'nearby'
   | 'destination'
   | 'routes'
   | 'navigation'

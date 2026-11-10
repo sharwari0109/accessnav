@@ -67,11 +67,11 @@ export default function Home() {
         {/* QUICK ACTIONS */}
         <div className="mt-3 flex flex-nowrap items-center gap-2">
 
-          <QuickChip
-            icon={<MapPin size={16} />}
-            label="Nearby"
-            onClick={() => go('search')}
-          />
+         <QuickChip
+  icon={<MapPin size={16} />}
+  label="Nearby"
+  onClick={() => go('nearby')}
+/>
 
           <QuickChip
             icon={<span>❤️</span>}

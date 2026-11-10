@@ -1,5 +1,7 @@
 import os
 import uuid
+import math
+import requests
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -1132,78 +1134,76 @@ def analyze_accessibility_route(
 # ACCESSIBILITY POINTS
 # ============================================================
 
+
+
 @app.get("/api/accessibility/points")
 def get_accessibility_points(
-    latitude: float,
-    longitude: float,
-    radius: float = Query(
-        default=1.0,
-        ge=0.1,
-        le=50.0,
-    ),
+    latitude: float = Query(..., ge=-90, le=90),
+    longitude: float = Query(..., ge=-180, le=180),
+    radius: float = Query(default=5.0, ge=0.1, le=50.0),
 ):
     """
-    Returns nearby accessibility information from the
-    MongoDB places dataset.
-
-    radius is currently used as a broad geographic filter
-    based on latitude/longitude distance.
-
-    This is intentionally simple for the current prototype.
-    A future version can use MongoDB 2dsphere indexes.
+    Find accessibility places around the user's live location.
+    Uses the Haversine formula for accurate distances.
     """
 
     places = list(
         places_collection.find(
             {},
-            {
-                "_id": 0,
-            },
+            {"_id": 0},
         )
     )
 
     nearby = []
+    earth_radius = 6371.0
 
     for place in places:
-
         place_lat = place.get("latitude")
         place_lng = place.get("longitude")
 
         if place_lat is None or place_lng is None:
             continue
 
-        # Simple approximate geographic distance.
-        # One degree latitude is approximately 111 km.
-        lat_distance = abs(
-            place_lat - latitude
-        ) * 111
+        try:
+            place_lat = float(place_lat)
+            place_lng = float(place_lng)
+        except (TypeError, ValueError):
+            continue
 
-        lng_distance = abs(
-            place_lng - longitude
-        ) * 111
+        if not (-90 <= place_lat <= 90):
+            continue
 
-        approximate_distance = (
-            lat_distance ** 2
-            + lng_distance ** 2
-        ) ** 0.5
+        if not (-180 <= place_lng <= 180):
+            continue
 
-        if approximate_distance <= radius:
+        lat1 = math.radians(latitude)
+        lat2 = math.radians(place_lat)
 
-            nearby.append(
-                {
-                    "id": place.get("id"),
-                    "name": place.get("name"),
-                    "latitude": place_lat,
-                    "longitude": place_lng,
-                    "tags": place.get("tags", []),
-                    "warnings": place.get("warnings", []),
-                    "score": place.get("score", 0),
-                    "distanceKm": round(
-                        approximate_distance,
-                        2,
-                    ),
-                }
-            )
+        delta_lat = math.radians(place_lat - latitude)
+        delta_lng = math.radians(place_lng - longitude)
+
+        a = (
+            math.sin(delta_lat / 2) ** 2
+            + math.cos(lat1)
+            * math.cos(lat2)
+            * math.sin(delta_lng / 2) ** 2
+        )
+
+        distance = 2 * earth_radius * math.asin(
+            min(1.0, math.sqrt(a))
+        )
+
+        if distance <= radius:
+            nearby.append({
+                "id": place.get("id"),
+                "name": place.get("name", "Unnamed place"),
+                "latitude": place_lat,
+                "longitude": place_lng,
+                "tags": place.get("tags", []),
+                "warnings": place.get("warnings", []),
+                "score": place.get("score", 0),
+                "distanceKm": round(distance, 2),
+            })
 
     nearby.sort(
         key=lambda item: item["distanceKm"]
@@ -1213,8 +1213,12 @@ def get_accessibility_points(
         "latitude": latitude,
         "longitude": longitude,
         "radiusKm": radius,
+        "total": len(nearby),
         "results": nearby,
-    }  
+    }
+
+
+  
 
 
 @app.get("/api/accessibility/routes-by-location")

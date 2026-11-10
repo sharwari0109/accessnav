@@ -32,6 +32,13 @@ export interface StartLocation {
   lat: number;
   lng: number;
 }
+export interface Destination {
+  id?: string;
+  name: string;
+  lat: number;
+  lng: number;
+  place?: Place;
+}
 
 export interface User {
   id?: string;

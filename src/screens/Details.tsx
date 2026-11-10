@@ -1,6 +1,9 @@
+
 import { useEffect, useState } from 'react';
 
 import { useApp } from '@/store';
+import type { Destination } from '@/store';
+
 import MumbaiMap from '@/components/MumbaiMap';
 import TopBar from '@/components/TopBar';
 import Button from '@/components/Button';
@@ -12,83 +15,167 @@ import {
   Check,
   AlertTriangle,
   Eye,
+  MapPin,
 } from 'lucide-react';
 
 import type { Place } from '@/types';
 
+// ============================================================
+// CONVERT DESTINATION INTO A PLACE
+// ============================================================
+
+function toPlace(destination: Destination): Place {
+  if (destination.place) {
+    return destination.place;
+  }
+
+  return {
+    id: destination.id ?? '',
+    name: destination.name,
+    area: 'Nearby',
+    distanceKm: 0,
+    score: 0,
+    tags: [],
+    warnings: [],
+    x: 0,
+    y: 0,
+    latitude: destination.lat,
+    longitude: destination.lng,
+    emoji: '📍',
+  };
+}
+
+// ============================================================
+// DETAILS SCREEN
+// ============================================================
+
 export default function Details() {
   const {
-    destination,
-    setDestination,
-    go,
-    mode,
-    selectedRoute,
-  } = useApp();
+  destination,
+  setDestination,
+  go,
+  mode,
+  selectedRoute,
+  startLocation,
+  travelMode,
+} = useApp();
 
   const [place, setPlace] = useState<Place | null>(
-    destination
+    destination ? toPlace(destination) : null
   );
 
   const [loading, setLoading] = useState(true);
-
   const [error, setError] = useState('');
 
+  const placeId = destination?.place?.id ?? destination?.id;
 
   // ============================================================
   // LOAD PLACE DETAILS FROM BACKEND
   // ============================================================
 
   useEffect(() => {
-    if (!destination) return;
-
-    const placeId = destination.id;
+    let cancelled = false;
 
     async function loadPlaceDetails() {
+      if (!destination) {
+        setPlace(null);
+        setLoading(false);
+        return;
+      }
+
+      // Show existing place information immediately.
+      setPlace(toPlace(destination));
+
+      // No ID means there is nothing to fetch.
+      if (!placeId) {
+        setLoading(false);
+        return;
+      }
+
       try {
         setLoading(true);
         setError('');
 
-        const data = await getPlace(placeId);
+        const data: Place = await getPlace(placeId);
+
+        if (cancelled) return;
 
         setPlace(data);
-        setDestination(data);
+
+        // Preserve the correct Destination structure.
+        setDestination({
+          id: data.id || placeId,
+          name: data.name,
+          lat: data.latitude,
+          lng: data.longitude,
+          place: data,
+        });
 
       } catch (err) {
-        console.error(
-          'Failed to load place details:',
-          err
-        );
+        if (cancelled) return;
 
-        setPlace(destination);
+        console.error('Failed to load place details:', err);
+
+        // Keep the existing place information visible.
+        setPlace(toPlace(destination));
 
         setError(
-          'Unable to refresh accessibility information.'
+          'Unable to refresh accessibility information. Showing available saved information.'
         );
 
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
 
-    loadPlaceDetails();
+    void loadPlaceDetails();
 
-  }, [destination?.id]);
-
+    return () => {
+      cancelled = true;
+    };
+  }, [placeId]);
 
   // ============================================================
-  // NO DESTINATION
+  // NO DESTINATION SELECTED
   // ============================================================
 
   if (!destination || !place) {
-    return null;
-  }
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center bg-white px-6 text-center">
 
+        <MapPin
+          size={40}
+          className="mb-3 text-slate-400"
+        />
+
+        <h2 className="text-lg font-bold text-slate-900">
+          No destination selected
+        </h2>
+
+        <p className="mt-2 text-sm text-slate-500">
+          Select a nearby place to view its accessibility details.
+        </p>
+
+        <div className="mt-5 w-full max-w-xs">
+          <Button
+            fullWidth
+            onClick={() => go('nearby')}
+          >
+            Back to Nearby
+          </Button>
+        </div>
+
+      </div>
+    );
+  }
 
   // ============================================================
   // LOADING
   // ============================================================
 
-  if (loading) {
+  if (loading && !place) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-slate-100">
 
@@ -106,14 +193,12 @@ export default function Details() {
     );
   }
 
-
   // ============================================================
   // BACKEND DATA
   // ============================================================
 
-  const conditions = place.tags;
-
-  const warnings = place.warnings;
+  const conditions = place.tags ?? [];
+  const warnings = place.warnings ?? [];
 
   const lowVision = [
     'High contrast route',
@@ -125,7 +210,6 @@ export default function Details() {
     'Busy intersection ahead',
   ];
 
-
   // ============================================================
   // MAIN UI
   // ============================================================
@@ -133,9 +217,7 @@ export default function Details() {
   return (
     <div className="screen-enter flex h-full w-full flex-col bg-white">
 
-      {/* ======================================================
-          MAP
-      ====================================================== */}
+      {/* MAP */}
 
       <div className="relative h-56 w-full shrink-0 overflow-hidden">
 
@@ -147,25 +229,63 @@ export default function Details() {
         />
 
         <TopBar
-          onBack={() => go('routes')}
+          onBack={() => go('destination')}
           transparent
         />
 
       </div>
+      {/* TRIP SUMMARY */}
 
+<div className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
 
-      {/* ======================================================
-          DETAILS
-      ====================================================== */}
+  <h2 className="mb-3 text-sm font-extrabold text-slate-900">
+    Trip Summary
+  </h2>
+
+  <div className="space-y-3">
+
+    <div className="flex justify-between gap-3">
+      <span className="text-sm text-slate-500">Source</span>
+      <span className="text-right text-sm font-semibold text-slate-800">
+        {startLocation?.name ?? 'Current Location'}
+      </span>
+    </div>
+
+    <div className="flex justify-between gap-3">
+      <span className="text-sm text-slate-500">Destination</span>
+      <span className="text-right text-sm font-semibold text-slate-800">
+        {destination.name}
+      </span>
+    </div>
+
+    <div className="flex justify-between gap-3">
+      <span className="text-sm text-slate-500">Travel Mode</span>
+      <span className="text-right text-sm font-semibold text-slate-800">
+        {travelMode === 'wheelchair' ? 'Wheelchair' : travelMode}
+      </span>
+    </div>
+
+    <div className="flex justify-between gap-3">
+      <span className="text-sm text-slate-500">Selected Route</span>
+      <span className="text-right text-sm font-semibold capitalize text-slate-800">
+        {selectedRoute}
+      </span>
+    </div>
+
+  </div>
+
+</div>
+
+      {/* DETAILS */}
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-8 pt-4">
 
-        {/* Destination name */}
+        {/* DESTINATION NAME */}
 
         <div className="mb-4">
 
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-            {place.area} · {place.distanceKm} km
+            {place.area || 'Nearby'} · {place.distanceKm ?? 0} km
           </p>
 
           <h1 className="mt-1 text-xl font-extrabold text-slate-900">
@@ -174,8 +294,15 @@ export default function Details() {
 
         </div>
 
+        {/* LOADING INDICATOR */}
 
-        {/* Error */}
+        {loading && (
+          <p className="mb-3 text-xs font-medium text-slate-500">
+            Refreshing accessibility information...
+          </p>
+        )}
+
+        {/* ERROR */}
 
         {error && (
           <div className="mb-4 rounded-2xl bg-warning-50 p-3">
@@ -187,73 +314,9 @@ export default function Details() {
           </div>
         )}
 
+        
 
-        {/* ==================================================
-            ACCESSIBILITY SCORE
-        ================================================== */}
-
-        <h2 className="text-lg font-extrabold text-slate-900">
-          Accessibility Score
-        </h2>
-
-        <div className="mt-2 flex items-center gap-3 rounded-2xl bg-accessible-50 p-4">
-
-          <ScoreBadge
-            score={place.score}
-            size="lg"
-          />
-
-          <div>
-
-            <p className="text-sm font-bold text-accessible-800">
-              {place.score >= 90
-                ? 'Highly Accessible'
-                : place.score >= 75
-                  ? 'Good Accessibility'
-                  : 'Moderate Accessibility'}
-            </p>
-
-            <p className="text-xs text-accessible-700">
-              Based on route & destination
-            </p>
-
-          </div>
-
-        </div>
-
-
-        {/* ==================================================
-            ROUTE CONDITIONS
-        ================================================== */}
-
-        <h2 className="mt-6 text-sm font-bold uppercase tracking-wide text-slate-400">
-          Route Conditions
-        </h2>
-
-        <div className="mt-2 space-y-2">
-
-          {conditions.map((condition) => (
-            <Row
-              key={condition}
-              ok
-              text={condition}
-            />
-          ))}
-
-          {warnings.map((warning) => (
-            <Row
-              key={warning}
-              warn
-              text={warning}
-            />
-          ))}
-
-        </div>
-
-
-        {/* ==================================================
-            LOW VISION
-        ================================================== */}
+        {/* LOW VISION */}
 
         {mode === 'lowvision' && (
           <>
@@ -292,10 +355,7 @@ export default function Details() {
           </>
         )}
 
-
-        {/* ==================================================
-            REPORT
-        ================================================== */}
+        {/* REPORT */}
 
         <div className="mt-7">
 
@@ -319,7 +379,6 @@ export default function Details() {
   );
 }
 
-
 // ============================================================
 // CONDITION ROW
 // ============================================================
@@ -333,7 +392,6 @@ function Row({
   warn?: boolean;
   text: string;
 }) {
-
   return (
     <div className="flex items-center gap-3">
 
