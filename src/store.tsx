@@ -1,13 +1,17 @@
+
 import {
   createContext,
   useContext,
   useEffect,
   useState,
   type ReactNode,
+  type Dispatch,
+  type SetStateAction,
 } from 'react';
 
 import type {
   AccessibilityMode,
+  TravelMode,
   ScreenName,
   Place,
 } from './types';
@@ -18,281 +22,278 @@ import {
   removeToken,
 } from './api';
 
-
-// ============================================================
-// DESTINATION
-// ============================================================
-
 export interface Destination {
+  id?: string;
   name: string;
   lat: number;
   lng: number;
   place?: Place;
 }
 
-
-// ============================================================
-// USER
-// ============================================================
+export interface StartLocation {
+  name: string;
+  lat: number;
+  lng: number;
+}
 
 export interface User {
   id?: string;
   _id?: string;
   name?: string;
   email?: string;
-
   [key: string]: unknown;
 }
-
-
-// ============================================================
-// APP STATE
-// ============================================================
 
 interface AppState {
   screen: ScreenName;
   go: (s: ScreenName) => void;
 
-  // Authentication
   user: User | null;
   setUser: (user: User | null) => void;
   authLoading: boolean;
   logout: () => void;
 
-  // Accessibility
   mode: AccessibilityMode;
   setMode: (m: AccessibilityMode) => void;
 
-  // Destination
+  preferences: string[];
+  setPreferences: Dispatch<SetStateAction<string[]>>;
+
+  largeText: boolean;
+  setLargeText: (enabled: boolean) => void;
+
+  highContrast: boolean;
+  setHighContrast: (enabled: boolean) => void;
+
+  voiceGuidance: boolean;
+  setVoiceGuidance: (enabled: boolean) => void;
+
+  travelMode: TravelMode;
+  setTravelMode: (mode: TravelMode) => void;
+
   destination: Destination | null;
   setDestination: (destination: Destination) => void;
 
-  // Route
-  selectedRoute:
-    | 'accessible'
-    | 'fastest'
-    | 'clear';
+  startLocation: StartLocation | null;
+  setStartLocation: (location: StartLocation | null) => void;
 
+  selectedRoute: 'accessible' | 'fastest' | 'clear';
   setSelectedRoute: (
-    r:
-      | 'accessible'
-      | 'fastest'
-      | 'clear'
+    route: 'accessible' | 'fastest' | 'clear'
   ) => void;
 
-  // Navigation
   navStep: number;
   setNavStep: (n: number) => void;
 
-  // Pause
   paused: boolean;
   setPaused: (p: boolean) => void;
 
-  // SOS
   sosActive: boolean;
   setSosActive: (a: boolean) => void;
 }
 
-
-// ============================================================
-// CONTEXT
-// ============================================================
-
 const Ctx = createContext<AppState | null>(null);
-
-
-// ============================================================
-// PROVIDER
-// ============================================================
 
 export function AppProvider({
   children,
 }: {
   children: ReactNode;
 }) {
+  const [screen, setScreen] = useState<ScreenName>('splash');
 
-  const [screen, setScreen] =
-    useState<ScreenName>('splash');
-
-  const [user, setUser] =
-    useState<User | null>(null);
-
-  const [authLoading, setAuthLoading] =
-    useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   const [mode, setMode] =
     useState<AccessibilityMode>('wheelchair');
 
+  // Load saved navigation preferences.
+  const [preferences, setPreferences] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('accessnav-preferences');
+
+      return saved
+        ? JSON.parse(saved)
+        : ['Most accessible route'];
+    } catch {
+      return ['Most accessible route'];
+    }
+  });
+
+  // Save navigation preferences.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        'accessnav-preferences',
+        JSON.stringify(preferences)
+      );
+    } catch (error) {
+      console.error(
+        'Could not save preferences:',
+        error
+      );
+    }
+  }, [preferences]);
+
+  // Load saved Large Text preference.
+  const [largeText, setLargeText] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('accessnav-large-text') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  // Load saved High Contrast preference.
+  const [highContrast, setHighContrast] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('accessnav-high-contrast') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  // Apply High Contrast throughout the application and save preference.
+  useEffect(() => {
+    document.documentElement.classList.toggle(
+      'high-contrast',
+      highContrast
+    );
+
+    try {
+      localStorage.setItem(
+        'accessnav-high-contrast',
+        String(highContrast)
+      );
+    } catch (error) {
+      console.error(
+        'Could not save High Contrast preference:',
+        error
+      );
+    }
+  }, [highContrast]);
+
+  // Load saved Voice Guidance preference.
+  const [voiceGuidance, setVoiceGuidance] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('accessnav-voice-guidance') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const [travelMode, setTravelMode] =
+    useState<TravelMode>('wheelchair');
+
   const [destination, setDestination] =
     useState<Destination | null>(null);
 
+  const [startLocation, setStartLocation] =
+    useState<StartLocation | null>(null);
+
   const [selectedRoute, setSelectedRoute] =
-    useState<
-      'accessible'
-      | 'fastest'
-      | 'clear'
-    >('accessible');
+    useState<'accessible' | 'fastest' | 'clear'>('accessible');
 
-  const [navStep, setNavStep] =
-    useState(0);
+  const [navStep, setNavStep] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const [sosActive, setSosActive] = useState(false);
 
-  const [paused, setPaused] =
-    useState(false);
-
-  const [sosActive, setSosActive] =
-    useState(false);
-
-
-  // ==========================================================
-  // RESTORE LOGIN SESSION
-  // ==========================================================
-
+  // Apply Large Text throughout the application and save preference.
   useEffect(() => {
+    document.documentElement.classList.toggle(
+      'large-text',
+      largeText
+    );
+
+    try {
+      localStorage.setItem(
+        'accessnav-large-text',
+        String(largeText)
+      );
+    } catch (error) {
+      console.error(
+        'Could not save Large Text preference:',
+        error
+      );
+    }
+  }, [largeText]);
+
+  // Save Voice Guidance preference.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        'accessnav-voice-guidance',
+        String(voiceGuidance)
+      );
+    } catch (error) {
+      console.error(
+        'Could not save Voice Guidance preference:',
+        error
+      );
+    }
+  }, [voiceGuidance]);
+
+  // Restore login session.
+  useEffect(() => {
+    let cancelled = false;
 
     async function restoreSession() {
-
       const token = getToken();
 
-
-      // ------------------------------------------------------
-      // No token
-      //
-      // This means the user has NOT logged in.
-      //
-      // IMPORTANT:
-      // Keep screen as "splash".
-      //
-      // Splash will show:
-      // Splash → Welcome → Login
-      // ------------------------------------------------------
-
       if (!token) {
-
-        setAuthLoading(false);
-
+        if (!cancelled) setAuthLoading(false);
         return;
       }
 
-
-      // ------------------------------------------------------
-      // Token exists
-      //
-      // Verify token with backend.
-      // ------------------------------------------------------
-
       try {
+        const currentUser = await getCurrentUser();
 
-        console.log(
-          'Restoring saved login session...'
-        );
-
-
-        const currentUser =
-          await getCurrentUser();
-
-
-        console.log(
-          'User session restored:',
-          currentUser
-        );
-
+        if (cancelled) return;
 
         setUser(currentUser);
-
-
-        // ----------------------------------------------------
-        // User was already logged in.
-        //
-        // Skip Login/Welcome and go to Home.
-        // ----------------------------------------------------
-
         setScreen('home');
-
       } catch (error) {
+        if (cancelled) return;
 
-        console.error(
-          'Saved session is invalid:',
-          error
-        );
-
-
-        // Token is invalid/expired.
+        console.error('Saved session is invalid:', error);
         removeToken();
-
         setUser(null);
-
-
-        // Go through normal logged-out flow.
         setScreen('splash');
-
       } finally {
-
-        setAuthLoading(false);
-
+        if (!cancelled) setAuthLoading(false);
       }
     }
 
+    void restoreSession();
 
-    restoreSession();
-
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-
-  // ==========================================================
-  // LOGOUT
-  // ==========================================================
-
   const logout = () => {
-
-    console.log('User logged out');
-
-
-    // Remove JWT
     removeToken();
-
-
-    // Remove current user
     setUser(null);
-
-
-    // Reset application state
     setDestination(null);
     setNavStep(0);
     setPaused(false);
     setSosActive(false);
-
-
-    // IMPORTANT:
-    // Go to Login directly after logout.
     setScreen('login');
   };
 
+  const go = (nextScreen: ScreenName) => {
+    setScreen(nextScreen);
 
-  // ==========================================================
-  // NAVIGATION
-  // ==========================================================
-
-  const go = (s: ScreenName) => {
-
-    setScreen(s);
-
-    if (s === 'navigation') {
+    if (nextScreen === 'navigation') {
       setNavStep(0);
     }
   };
 
-
-  // ==========================================================
-  // PROVIDER
-  // ==========================================================
-
   return (
     <Ctx.Provider
       value={{
-
         screen,
         go,
-
         user,
         setUser,
         authLoading,
@@ -301,8 +302,26 @@ export function AppProvider({
         mode,
         setMode,
 
+        preferences,
+        setPreferences,
+
+        largeText,
+        setLargeText,
+
+        highContrast,
+        setHighContrast,
+
+        voiceGuidance,
+        setVoiceGuidance,
+
+        travelMode,
+        setTravelMode,
+
         destination,
         setDestination,
+
+        startLocation,
+        setStartLocation,
 
         selectedRoute,
         setSelectedRoute,
@@ -322,19 +341,11 @@ export function AppProvider({
   );
 }
 
-
-// ============================================================
-// HOOK
-// ============================================================
-
 export function useApp() {
-
   const context = useContext(Ctx);
 
   if (!context) {
-    throw new Error(
-      'useApp must be used within AppProvider'
-    );
+    throw new Error('useApp must be used within AppProvider');
   }
 
   return context;

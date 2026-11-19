@@ -8,7 +8,12 @@ import TopBar from '@/components/TopBar';
 import Button from '@/components/Button';
 import ScoreBadge from '@/components/ScoreBadge';
 
-import { getPlace } from '@/api';
+import {
+  getPlace,
+  getSavedPlaces,
+  savePlace,
+  deleteSavedPlace,
+} from '@/api';
 
 import {
   Check,
@@ -16,6 +21,7 @@ import {
   Navigation,
   Eye,
   MapPin,
+  Bookmark,
 } from 'lucide-react';
 
 import type { Place } from '@/types';
@@ -50,6 +56,80 @@ export default function Destination() {
 
   const [error, setError] =
     useState('');
+
+
+    const [savedId, setSavedId] = useState<string | null>(null);
+    const [saving, setSaving] = useState(false);
+    const [saveError, setSaveError] = useState('');
+    
+    useEffect(() => {
+      let active = true;
+    
+      async function checkSaved() {
+        try {
+          setSavedId(null);
+    
+          const saved = await getSavedPlaces();
+    
+          if (active) {
+            const existing = saved.find((item) =>
+              place?.id
+                ? item.placeId === place.id
+                : item.latitude === destination?.lat &&
+                  item.longitude === destination?.lng
+            );
+    
+            setSavedId(existing?.id ?? null);
+          }
+        } catch (err) {
+          console.error('Could not check saved place:', err);
+        }
+      }
+    
+      if (destination) {
+        checkSaved();
+      }
+    
+      return () => {
+        active = false;
+      };
+    }, [destination?.lat, destination?.lng, place?.id]);
+    
+    async function handleSaveToggle() {
+      if (!destination || saving) return;
+    
+      try {
+        setSaving(true);
+        setSaveError('');
+    
+        if (savedId) {
+          await deleteSavedPlace(savedId);
+          setSavedId(null);
+        } else {
+          const result = await savePlace({
+            placeId: place?.id ?? null,
+            name: destination.name,
+            address: place?.area ?? '',
+            latitude: destination.lat,
+            longitude: destination.lng,
+            emoji: place?.emoji ?? '📍',
+          });
+    
+          setSavedId(result.id);
+        }
+      } catch (err) {
+        console.error('Save place error:', err);
+    
+        setSaveError(
+          err instanceof Error
+            ? err.message
+            : 'Unable to update saved place.'
+        );
+      } finally {
+        setSaving(false);
+      }
+    }
+
 
 
   // ==========================================================
@@ -352,6 +432,35 @@ export default function Destination() {
             </div>
 
           )}
+          {/* SAVE PLACE BUTTON */}
+
+<button
+  type="button"
+  onClick={handleSaveToggle}
+  disabled={saving}
+  className={`mb-3 flex w-full items-center justify-center gap-2 rounded-2xl border p-3 text-sm font-bold transition ${
+    savedId
+      ? 'border-primary-200 bg-primary-50 text-primary-700'
+      : 'border-slate-200 bg-white text-slate-700'
+  }`}
+>
+  <Bookmark
+    size={19}
+    fill={savedId ? 'currentColor' : 'none'}
+  />
+
+  {saving
+    ? 'Please wait...'
+    : savedId
+      ? 'Saved · Remove from Saved Places'
+      : 'Save Place'}
+</button>
+
+{saveError && (
+  <p className="mb-3 text-center text-xs text-danger-500">
+    {saveError}
+  </p>
+)}
 
 
           {/* ==================================================
@@ -596,6 +705,7 @@ export default function Destination() {
           </div>
 
         )}
+
 
 
         {/* ==================================================

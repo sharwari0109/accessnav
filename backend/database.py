@@ -50,7 +50,8 @@ places_collection = db["places"]
 saved_collection = db["saved_places"]
 reports_collection = db["reports"]
 users_collection = db["users"]
-
+emergency_contacts_collection = db["emergency_contacts"]
+sos_alerts_collection = db["sos_alerts"]
 
 # --------------------------------------------------
 # Test MongoDB connection

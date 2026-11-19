@@ -1,4 +1,4 @@
-import { useState } from 'react';
+
 import type React from 'react';
 
 import { useApp } from '@/store';
@@ -13,55 +13,60 @@ export default function Profile() {
     setMode,
     user,
     logout,
+    preferences,
+    setPreferences,
+    largeText,
+    setLargeText,
+    highContrast,
+    setHighContrast,
+    voiceGuidance,
+    setVoiceGuidance,
   } = useApp();
 
-  const [prefs, setPrefs] = useState({
-    mostAccessible: true,
-    avoidStairs: true,
-    preferRamps: true,
-    preferElevators: true,
-    avoidSteepSlopes: true,
-
-    highContrast: mode === 'lowvision',
-    voiceNav: mode === 'lowvision',
-    clearCrossings: mode === 'lowvision',
-    avoidIntersections: mode === 'lowvision',
-
-    largeText: false,
-    appHighContrast: false,
-    appVoice: false,
-  });
-
-  const toggle = (key: keyof typeof prefs) => {
-    setPrefs((previous) => ({
-      ...previous,
-      [key]: !previous[key],
-    }));
+  const togglePreference = (label: string) => {
+    setPreferences((previous) =>
+      previous.includes(label)
+        ? previous.filter((item) => item !== label)
+        : [...previous, label]
+    );
   };
 
-  const changeMode = (
-    newMode: 'wheelchair' | 'lowvision'
-  ) => {
+  const changeMode = (newMode: 'wheelchair' | 'lowvision') => {
     setMode(newMode);
 
     if (newMode === 'lowvision') {
-      setPrefs((previous) => ({
-        ...previous,
-        highContrast: true,
-        voiceNav: true,
-        clearCrossings: true,
-        avoidIntersections: true,
-      }));
+      setPreferences((previous) => [
+        ...previous.filter((item) =>
+          [
+            'Most accessible route',
+            'Avoid stairs',
+            'Prefer ramps',
+            'Prefer elevators',
+            'Avoid steep slopes',
+          ].includes(item)
+        ),
+        'High contrast',
+        'Voice guidance',
+        'Clear crossings',
+        'Avoid complicated intersections',
+      ]);
     } else {
-      setPrefs((previous) => ({
-        ...previous,
-        highContrast: false,
-        voiceNav: false,
-        clearCrossings: false,
-        avoidIntersections: false,
-      }));
+      setPreferences((previous) => [
+        ...previous.filter((item) =>
+          [
+            'Most accessible route',
+            'Avoid stairs',
+            'Prefer ramps',
+            'Prefer elevators',
+            'Avoid steep slopes',
+          ].includes(item)
+        ),
+      ]);
     }
   };
+
+  const hasPreference = (label: string) =>
+    preferences.includes(label);
 
   return (
     <div className="screen-enter flex h-full w-full flex-col bg-slate-50">
@@ -73,35 +78,23 @@ export default function Profile() {
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-24 pt-16">
 
-        {/* ==================================================
-            PROFILE
-        ================================================== */}
-
         <div className="flex flex-col items-center">
 
-          {/* Profile avatar */}
           <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary-600 text-2xl font-extrabold text-white shadow-card">
             {user?.name
               ? user.name.charAt(0).toUpperCase()
               : 'U'}
           </div>
 
-          {/* User name */}
           <h2 className="mt-3 text-lg font-extrabold text-slate-900">
             {user?.name || 'User'}
           </h2>
 
-          {/* User email */}
           <p className="text-sm text-slate-500">
             {user?.email || ''}
           </p>
 
         </div>
-
-
-        {/* ==================================================
-            ACCESSIBILITY
-        ================================================== */}
 
         <Section title="Accessibility">
 
@@ -118,11 +111,8 @@ export default function Profile() {
                       : 'border-slate-200 bg-white'
                   }`}
                 >
-
                   <span className="text-2xl">
-                    {currentMode === 'wheelchair'
-                      ? '♿'
-                      : '👁'}
+                    {currentMode === 'wheelchair' ? '♿' : '👁'}
                   </span>
 
                   <p
@@ -136,13 +126,11 @@ export default function Profile() {
                       ? 'Wheelchair'
                       : 'Low Vision'}
                   </p>
-
                 </button>
               )
             )}
 
           </div>
-
 
           <button
             onClick={() => go('setup')}
@@ -153,165 +141,102 @@ export default function Profile() {
 
         </Section>
 
-
-        {/* ==================================================
-            NAVIGATION
-        ================================================== */}
-
         <Section title="Navigation">
 
           <Row
             label="Most accessible route"
-            on={prefs.mostAccessible}
-            onChange={() =>
-              toggle('mostAccessible')
-            }
+            on={hasPreference('Most accessible route')}
+            onChange={() => togglePreference('Most accessible route')}
           />
 
-          <Row
-            label="Avoid stairs"
-            on={prefs.avoidStairs}
-            onChange={() =>
-              toggle('avoidStairs')
-            }
-          />
+          {mode === 'wheelchair' ? (
+            <>
+              <Row
+                label="Avoid stairs"
+                on={hasPreference('Avoid stairs')}
+                onChange={() => togglePreference('Avoid stairs')}
+              />
 
-          <Row
-            label="Prefer ramps"
-            on={prefs.preferRamps}
-            onChange={() =>
-              toggle('preferRamps')
-            }
-          />
+              <Row
+                label="Prefer ramps"
+                on={hasPreference('Prefer ramps')}
+                onChange={() => togglePreference('Prefer ramps')}
+              />
 
-          <Row
-            label="Prefer elevators"
-            on={prefs.preferElevators}
-            onChange={() =>
-              toggle('preferElevators')
-            }
-          />
+              <Row
+                label="Prefer elevators"
+                on={hasPreference('Prefer elevators')}
+                onChange={() => togglePreference('Prefer elevators')}
+              />
 
-          <Row
-            label="Avoid steep slopes"
-            on={prefs.avoidSteepSlopes}
-            onChange={() =>
-              toggle('avoidSteepSlopes')
-            }
-          />
+              <Row
+                label="Avoid steep slopes"
+                on={hasPreference('Avoid steep slopes')}
+                onChange={() => togglePreference('Avoid steep slopes')}
+              />
+            </>
+          ) : (
+            <>
+              <Row
+                label="Voice navigation"
+                on={hasPreference('Voice guidance')}
+                onChange={() => togglePreference('Voice guidance')}
+              />
 
-          <Row
-            label="High contrast"
-            on={prefs.highContrast}
-            onChange={() =>
-              toggle('highContrast')
-            }
-          />
+              <Row
+                label="Clear crossings"
+                on={hasPreference('Clear crossings')}
+                onChange={() => togglePreference('Clear crossings')}
+              />
 
-          <Row
-            label="Voice navigation"
-            on={prefs.voiceNav}
-            onChange={() =>
-              toggle('voiceNav')
-            }
-          />
-
-          <Row
-            label="Clear crossings"
-            on={prefs.clearCrossings}
-            onChange={() =>
-              toggle('clearCrossings')
-            }
-          />
-
-          <Row
-            label="Avoid complicated intersections"
-            on={prefs.avoidIntersections}
-            onChange={() =>
-              toggle('avoidIntersections')
-            }
-          />
+              <Row
+                label="Avoid complicated intersections"
+                on={hasPreference('Avoid complicated intersections')}
+                onChange={() => togglePreference('Avoid complicated intersections')}
+              />
+            </>
+          )}
 
         </Section>
-
-
-        {/* ==================================================
-            APP
-        ================================================== */}
 
         <Section title="App">
 
           <Row
             label="Large text"
-            on={prefs.largeText}
-            onChange={() =>
-              toggle('largeText')
-            }
+            on={largeText}
+            onChange={() => setLargeText(!largeText)}
           />
 
           <Row
             label="High contrast"
-            on={prefs.appHighContrast}
-            onChange={() =>
-              toggle('appHighContrast')
-            }
+            on={highContrast}
+            onChange={() => setHighContrast(!highContrast)}
           />
 
           <Row
             label="Voice guidance"
-            on={prefs.appVoice}
-            onChange={() =>
-              toggle('appVoice')
-            }
+            on={voiceGuidance}
+            onChange={() => setVoiceGuidance(!voiceGuidance)}
           />
 
         </Section>
 
-
-        {/* ==================================================
-            LOGOUT
-        ================================================== */}
-
         <div className="mt-6">
-
           <button
             onClick={logout}
-            className="
-              w-full
-              rounded-xl
-              border
-              border-red-200
-              bg-red-50
-              py-3
-              text-sm
-              font-bold
-              text-red-600
-              transition
-              hover:bg-red-100
-            "
+            className="w-full rounded-xl border border-red-200 bg-red-50 py-3 text-sm font-bold text-red-600 transition hover:bg-red-100"
           >
             Logout
           </button>
-
         </div>
 
       </div>
-
-
-      {/* ====================================================
-          BOTTOM NAVIGATION
-      ==================================================== */}
 
       <BottomNav />
 
     </div>
   );
 }
-
-
-// ============================================================
-// SECTION
-// ============================================================
 
 function Section({
   title,
@@ -322,7 +247,6 @@ function Section({
 }) {
   return (
     <div className="mt-6">
-
       <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">
         {title}
       </h3>
@@ -330,15 +254,9 @@ function Section({
       <div className="rounded-2xl bg-white p-4 shadow-card">
         {children}
       </div>
-
     </div>
   );
 }
-
-
-// ============================================================
-// TOGGLE ROW
-// ============================================================
 
 function Row({
   label,
@@ -351,7 +269,6 @@ function Row({
 }) {
   return (
     <div className="flex items-center justify-between border-b border-slate-100 py-3 last:border-0">
-
       <span className="pr-3 text-sm font-medium text-slate-700">
         {label}
       </span>
@@ -361,7 +278,6 @@ function Row({
         onChange={onChange}
         label={label}
       />
-
     </div>
   );
 }

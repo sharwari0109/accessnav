@@ -25,3 +25,25 @@ dist-ssr
 venv/
 __pycache__/
 *.pyc
+
+# Android build files
+android/.gradle/
+android/**/build/
+android/local.properties
+android/.idea/
+
+# iOS temporary files
+ios/App/Pods/
+ios/App/build/
+ios/DerivedData/
+
+# Environment files
+.env.*
+!.env.example
+# AccessNav release security and generated files
+accessnav-release-key.jks
+android/app/release/
+android/app/src/main/res/drawable/splash_old.png
+
+# OpenStreetMap generated cache
+backend/osm_cache/

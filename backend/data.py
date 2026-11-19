@@ -554,14 +554,36 @@ NAV_STATES = [
 # ============================================================
 
 REPORT_OPTIONS = [
-    "Blocked sidewalk",
+    # Wheelchair accessibility
+    "Ramp available",
     "Broken ramp",
+    "Ramp blocked",
+    "No ramp available",
+    "Stairs or steps",
     "Broken elevator",
-    "Construction",
+    "Elevator unavailable",
+    "Accessible entrance available",
+    "Accessible entrance blocked",
+
+    # Path and sidewalk conditions
+    "Blocked sidewalk",
+    "Uneven sidewalk",
+    "Damaged sidewalk",
     "Obstacle",
+    "Construction",
+    "Steep slope",
+    "Accessible crossing available",
+    "Unsafe crossing",
+
+    # Low-vision accessibility
+    "Tactile paving available",
+    "Tactile paving damaged",
+    "Missing or unclear signage",
+    "Poor lighting",
+
+    # General
     "Other",
 ]
-
 
 # ============================================================
 # ROUTES

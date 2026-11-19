@@ -7,7 +7,8 @@ import TopBar from '@/components/TopBar';
 import ScoreBadge from '@/components/ScoreBadge';
 import BottomNav from '@/components/BottomNav';
 
-import { getSavedPlaces } from '@/api';
+import { getSavedPlaces, deleteSavedPlace } from '@/api';
+import { BookmarkX } from 'lucide-react';
 
 import type { Place } from '@/types';
 
@@ -17,10 +18,12 @@ interface SavedPlace {
   name: string;
   address: string;
   emoji: string;
-  placeId: string;
-  place: Place;
+  placeId: string | null;
+  latitude: number;
+  longitude: number;
+  createdAt?: string;
+  place: Place | null;
 }
-
 
 export default function Saved() {
 
@@ -31,6 +34,19 @@ export default function Saved() {
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState('');
+
+  async function handleDelete(savedId: string) {
+    try {
+      await deleteSavedPlace(savedId);
+  
+      setSavedPlaces((previous) =>
+        previous.filter((item) => item.id !== savedId)
+      );
+    } catch (err) {
+      console.error('Failed to delete saved place:', err);
+      setError('Unable to remove saved place.');
+    }
+  }
 
 
   // =====================================================
@@ -165,18 +181,34 @@ export default function Saved() {
 
             {savedPlaces.map((s) => (
 
-              <button
-                key={s.id}
-                onClick={() => {
+<div
+key={s.id}
+role="button"
+tabIndex={0}
+onClick={() => {
+  setDestination({
+    name: s.name,
+    lat: s.latitude,
+    lng: s.longitude,
+    ...(s.place ? { place: s.place } : {}),
+  });
 
-                  setDestination(s.place);
-
-                  go('destination');
-
-                }}
-                className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left shadow-sm active:scale-[0.99]"
-              >
-
+  go('destination');
+}}
+onKeyDown={(e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    setDestination({
+      name: s.name,
+      lat: s.latitude,
+      lng: s.longitude,
+      ...(s.place ? { place: s.place } : {}),
+    });
+    go('destination');
+  }
+}}
+className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left shadow-sm active:scale-[0.99]"
+>
                 <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-danger-50 text-2xl">
 
                   {s.emoji}
@@ -202,12 +234,30 @@ export default function Saved() {
                 </div>
 
 
-                <ScoreBadge
-                  score={s.place.score}
-                  size="sm"
-                />
+                {s.place ? (
+  <ScoreBadge
+    score={s.place.score}
+    size="sm"
+  />
+) : (
+  <span className="text-xs font-medium text-slate-400">
+    Map location
+  </span>
+)}
 
-              </button>
+<button
+  type="button"
+  onClick={(e) => {
+    e.stopPropagation();
+    handleDelete(s.id);
+  }}
+  className="rounded-xl p-2 text-slate-400 hover:bg-red-50 hover:text-red-500"
+  aria-label="Remove saved place"
+>
+  <BookmarkX size={19} />
+</button>
+
+</div>
 
             ))}
 

@@ -20,6 +20,7 @@ import Report from '@/screens/Report';
 import Saved from '@/screens/Saved';
 import Profile from '@/screens/Profile';
 import SOS from '@/screens/SOS';
+import Nearby from '@/screens/Nearby';
 
 import type { ScreenName } from '@/types';
 
@@ -58,6 +59,8 @@ const SCREENS: Record<
   details: Details,
 
   report: Report,
+
+  nearby: Nearby,
 
   saved: Saved,
 

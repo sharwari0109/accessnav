@@ -537,12 +537,11 @@ export default function Search() {
             SECTION TITLE
             ==================================================== */}
 
-        <p className="mb-2 px-1 text-xs font-bold uppercase tracking-wide text-slate-400">
-          {q
-            ? 'Search results'
-            : 'Nearby places'}
-        </p>
-
+        {q && (
+  <p className="mb-2 px-1 text-xs font-bold uppercase tracking-wide text-slate-400">
+    Search results
+  </p>
+)}
 
         {/* ====================================================
             MAP SEARCH RESULTS
@@ -615,67 +614,9 @@ export default function Search() {
           )}
 
 
-        {/* ====================================================
-            LOCAL ACCESSIBILITY DATABASE
-            ==================================================== */}
+        
 
-        {!q &&
-          !loading &&
-          !error &&
-          localResults.length > 0 && (
-
-            <div className="space-y-2">
-
-              <p className="px-1 text-xs font-bold text-slate-500">
-                Accessibility places
-              </p>
-
-
-              {localResults.map(
-                (p) => (
-
-                  <button
-                    key={p.id}
-                    onClick={() =>
-                      selectLocalPlace(
-                        p,
-                      )
-                    }
-                    className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left shadow-sm active:scale-[0.99]"
-                  >
-
-                    <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary-50 text-2xl">
-                      {p.emoji}
-                    </span>
-
-
-                    <div className="min-w-0 flex-1">
-
-                      <p className="truncate text-sm font-bold text-slate-900">
-                        {p.name}
-                      </p>
-
-
-                      <p className="text-xs text-slate-500">
-                        {p.distanceKm} km ·{' '}
-                        {p.area}
-                      </p>
-
-                    </div>
-
-
-                    <ScoreBadge
-                      score={p.score}
-                      size="sm"
-                    />
-
-                  </button>
-
-                ),
-              )}
-
-            </div>
-          )}
+        
 
 
         {/* ====================================================
@@ -747,9 +688,8 @@ export default function Search() {
             ==================================================== */}
 
         {q.trim().length >= 3 &&
-          !searchingMap &&
-          mapResults.length === 0 &&
-          localResults.length === 0 && (
+  !searchingMap &&
+  mapResults.length === 0 && (
 
             <div className="py-10 text-center">
 

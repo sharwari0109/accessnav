@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from 'react';
 
 import { useApp } from '@/store';
@@ -11,8 +12,7 @@ import {
   submitReport,
 } from '@/api';
 
-import { Check } from 'lucide-react';
-
+import { Check, MapPin, Info } from 'lucide-react';
 
 export default function Report() {
   const {
@@ -21,48 +21,37 @@ export default function Report() {
     destination,
   } = useApp();
 
-
   // ============================================================
   // STATE
   // ============================================================
 
   const [reportOptions, setReportOptions] = useState<string[]>([]);
-
   const [selected, setSelected] = useState<string | null>(null);
-
   const [desc, setDesc] = useState('');
-
   const [done, setDone] = useState(false);
 
   const [loadingOptions, setLoadingOptions] = useState(true);
-
   const [submitting, setSubmitting] = useState(false);
 
-  const [error, setError] = useState('');
-
+  const [optionsError, setOptionsError] = useState('');
+  const [submitError, setSubmitError] = useState('');
 
   // ============================================================
-  // LOAD REPORT OPTIONS FROM BACKEND
+  // LOAD REPORT OPTIONS
   // ============================================================
 
   useEffect(() => {
     async function loadReportOptions() {
       try {
         setLoadingOptions(true);
-        setError('');
+        setOptionsError('');
 
         const data = await getReportOptions();
 
         setReportOptions(data);
       } catch (err) {
-        console.error(
-          'Failed to load report options:',
-          err
-        );
-
-        setError(
-          'Unable to load report options.'
-        );
+        console.error('Failed to load report options:', err);
+        setOptionsError('Unable to load report options.');
       } finally {
         setLoadingOptions(false);
       }
@@ -71,67 +60,51 @@ export default function Report() {
     loadReportOptions();
   }, []);
 
-
   // ============================================================
   // SUBMIT REPORT
   // ============================================================
 
   async function handleSubmit() {
-    if (!selected) {
+    if (!selected || submitting) {
+      return;
+    }
+
+    if (!destination) {
+      setSubmitError(
+        'Please select a location before submitting a report.'
+      );
       return;
     }
 
     try {
       setSubmitting(true);
-      setError('');
-
-      /*
-       * If the user came from a destination screen,
-       * send that place ID.
-       *
-       * If no destination is selected, use a temporary
-       * "unknown" value.
-       */
-      const placeId =
-        destination?.id ?? 'unknown';
-
+      setSubmitError('');
 
       const response = await submitReport({
-        placeId: placeId,
+        placeId: destination.place?.id ?? null,
+        placeName: destination.name,
+        latitude: destination.lat,
+        longitude: destination.lng,
         reportType: selected,
-        description: desc,
+        description: desc.trim(),
       });
 
+      console.log('Report submitted successfully:', response);
 
-      console.log(
-        'Report submitted successfully:',
-        response
-      );
-
-
-      // Show success popup
       setDone(true);
-
-
-      // Clear form
       setSelected(null);
       setDesc('');
 
     } catch (err) {
-      console.error(
-        'Failed to submit report:',
-        err
-      );
+      console.error('Failed to submit report:', err);
 
-      setError(
+      setSubmitError(
         'Unable to submit your report. Please try again.'
       );
-
     } finally {
       setSubmitting(false);
     }
   }
-
 
   // ============================================================
   // UI
@@ -140,9 +113,7 @@ export default function Report() {
   return (
     <div className="screen-enter flex h-full w-full flex-col bg-white">
 
-      {/* ======================================================
-          MAP HEADER
-      ====================================================== */}
+      {/* MAP HEADER */}
 
       <div className="relative h-44 w-full shrink-0 overflow-hidden">
 
@@ -159,10 +130,7 @@ export default function Report() {
 
       </div>
 
-
-      {/* ======================================================
-          CONTENT
-      ====================================================== */}
+      {/* CONTENT */}
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-8 pt-4">
 
@@ -171,15 +139,39 @@ export default function Report() {
         </h1>
 
         <p className="mt-1 text-sm text-slate-500">
-          Help make navigation safer for everyone.
+          Help make navigation safer and more accessible for everyone.
         </p>
 
+        {/* COMMUNITY REPORT INFORMATION */}
 
-        {/* ==================================================
-            REPORT OPTIONS
-        ================================================== */}
+        <div className="mt-4 flex gap-3 rounded-2xl border border-primary-200 bg-primary-50 p-3">
 
-        <div className="mt-5 grid grid-cols-2 gap-2.5">
+          <Info
+            size={20}
+            className="mt-0.5 shrink-0 text-primary-600"
+          />
+
+          <div>
+            <p className="text-sm font-bold text-slate-900">
+              Share accessibility information
+            </p>
+
+            <p className="mt-1 text-xs leading-relaxed text-slate-600">
+              Report ramps, elevators, accessible entrances,
+              sidewalk conditions and other facilities.
+              Your contribution can help other users.
+            </p>
+          </div>
+
+        </div>
+
+        {/* REPORT OPTIONS */}
+
+        <h2 className="mt-6 text-sm font-bold uppercase tracking-wide text-slate-400">
+          Select a report category
+        </h2>
+
+        <div className="mt-3 grid grid-cols-2 gap-2.5">
 
           {loadingOptions && (
             <div className="col-span-2 py-8 text-center text-sm text-slate-400">
@@ -187,51 +179,50 @@ export default function Report() {
             </div>
           )}
 
-
-          {!loadingOptions && error && (
+          {!loadingOptions && optionsError && (
             <div className="col-span-2 py-8 text-center">
 
               <p className="text-sm text-danger-500">
-                {error}
+                {optionsError}
               </p>
 
               <p className="mt-1 text-xs text-slate-400">
-                Make sure the FastAPI backend is running.
+                Make sure the backend is running.
               </p>
 
             </div>
           )}
 
-
           {!loadingOptions &&
-            !error &&
+            !optionsError &&
             reportOptions.map((opt) => {
-
-              const isSel =
-                selected === opt;
+              const isSelected = selected === opt;
 
               return (
                 <button
                   key={opt}
-                  onClick={() =>
-                    setSelected(opt)
-                  }
-                  className={`flex items-center gap-2 rounded-2xl border-2 p-3.5 text-left text-sm font-semibold transition active:scale-[0.98] ${
-                    isSel
+                  type="button"
+                  onClick={() => {
+                    setSelected(opt);
+                    setSubmitError('');
+                  }}
+                  aria-pressed={isSelected}
+                  className={`flex min-h-14 items-center gap-2 rounded-2xl border-2 p-3.5 text-left text-sm font-semibold transition active:scale-[0.98] ${
+                    isSelected
                       ? 'border-primary-600 bg-primary-50 text-primary-700'
                       : 'border-slate-200 text-slate-700'
                   }`}
                 >
 
-                  {isSel && (
+                  {isSelected && (
                     <Check
                       size={16}
                       strokeWidth={3}
-                      className="text-primary-600"
+                      className="shrink-0 text-primary-600"
                     />
                   )}
 
-                  {opt}
+                  <span>{opt}</span>
 
                 </button>
               );
@@ -239,59 +230,97 @@ export default function Report() {
 
         </div>
 
-
-        {/* ==================================================
-            DESCRIPTION
-        ================================================== */}
+        {/* DESCRIPTION */}
 
         <h2 className="mt-6 text-sm font-bold uppercase tracking-wide text-slate-400">
-          Description
+          Additional details
         </h2>
 
         <textarea
           value={desc}
-          onChange={(e) =>
-            setDesc(e.target.value)
+          onChange={(e) => setDesc(e.target.value)}
+          placeholder={
+            selected === 'Ramp available'
+              ? 'Where is the ramp? Is it suitable for wheelchair access?'
+              : selected === 'Broken ramp' || selected === 'Ramp blocked'
+                ? 'Describe the ramp condition or obstruction...'
+                : selected === 'Broken elevator' || selected === 'Elevator unavailable'
+                  ? 'Where is the elevator? What problem did you notice?'
+                  : 'Describe the location and accessibility condition...'
           }
-          placeholder="Describe the issue"
           rows={4}
           className="mt-2 w-full resize-none rounded-2xl border border-slate-200 p-4 text-sm text-slate-900 outline-none focus:border-primary-500 placeholder:text-slate-400"
         />
 
+        <p className="mt-1 text-xs text-slate-400">
+          Add useful details to help other users understand the location.
+        </p>
 
-        {/* ==================================================
-            DESTINATION INFORMATION
-        ================================================== */}
+        {/* DESTINATION INFORMATION */}
 
         {destination && (
-          <div className="mt-3 rounded-2xl bg-slate-50 p-3">
+          <div className="mt-4 flex items-start gap-3 rounded-2xl bg-slate-50 p-3">
 
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-              Reporting for
+            <MapPin
+              size={19}
+              className="mt-0.5 shrink-0 text-primary-600"
+            />
+
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                Reporting location
+              </p>
+
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {destination.name}
+              </p>
+
+              <p className="mt-1 text-xs text-slate-500">
+                {destination.lat.toFixed(5)}, {destination.lng.toFixed(5)}
+              </p>
+            </div>
+
+          </div>
+        )}
+
+        {!destination && (
+          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3">
+
+            <p className="text-sm font-semibold text-amber-800">
+              No location selected
             </p>
 
-            <p className="mt-1 text-sm font-semibold text-slate-900">
-              {destination.name}
+            <p className="mt-1 text-xs text-amber-700">
+              Select a destination on the map before submitting your report.
             </p>
 
           </div>
         )}
 
+        {/* VERIFICATION INFORMATION */}
 
-        {/* ==================================================
-            ERROR MESSAGE
-        ================================================== */}
+        <div className="mt-4 rounded-2xl border border-slate-200 p-3">
 
-        {error && !loadingOptions && (
+          <p className="text-xs font-bold text-slate-700">
+            Community verification
+          </p>
+
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+            Your report will be marked as pending verification.
+            It will not automatically become a confirmed accessibility facility.
+          </p>
+
+        </div>
+
+        {/* ERROR */}
+
+        {submitError && (
           <p className="mt-4 text-center text-sm text-danger-500">
-            {error}
+            {submitError}
           </p>
         )}
 
-
-        {/* ==================================================
-            SUBMIT BUTTON
-        ================================================== */}
+        {/* SUBMIT */}
 
         <div className="mt-6">
 
@@ -299,32 +328,25 @@ export default function Report() {
             fullWidth
             disabled={
               !selected ||
+              !destination ||
               submitting ||
-              loadingOptions
+              loadingOptions ||
+              !!optionsError
             }
             onClick={handleSubmit}
             className="text-lg"
           >
-            {submitting
-              ? 'Submitting...'
-              : 'Submit Report'}
+            {submitting ? 'Submitting...' : 'Submit Report'}
           </Button>
 
         </div>
 
       </div>
 
-
-      {/* ======================================================
-          SUCCESS OVERLAY
-      ====================================================== */}
+      {/* SUCCESS OVERLAY */}
 
       {done && (
-        <Overlay
-          onClose={() =>
-            setDone(false)
-          }
-        >
+        <Overlay onClose={() => setDone(false)}>
 
           <div className="mb-4 flex justify-center">
 
@@ -340,24 +362,23 @@ export default function Report() {
 
           </div>
 
-
           <h2 className="text-center text-2xl font-extrabold text-slate-900">
             Thank you!
           </h2>
 
-
           <p className="mt-2 text-center text-sm text-slate-500">
-            Your report helps make navigation safer for everyone.
+            Your accessibility report has been submitted and is pending verification.
+            Thank you for helping the ACCESSNAV community.
           </p>
-
 
           <div className="mt-6">
 
             <Button
               fullWidth
-              onClick={() =>
-                go('home')
-              }
+              onClick={() => {
+                setDone(false);
+                go('home');
+              }}
             >
               Done
             </Button>
