@@ -584,7 +584,7 @@ export default function MumbaiMap({
                         : '🔵 Wheelchair accessible'}
                   </strong>
 
-                  <br />
+        <br />
 
                   <strong>{point.name}</strong>
 

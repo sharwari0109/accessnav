@@ -298,7 +298,6 @@ export function AppProvider({
         setUser,
         authLoading,
         logout,
-
         mode,
         setMode,
 
@@ -325,13 +324,10 @@ export function AppProvider({
 
         selectedRoute,
         setSelectedRoute,
-
         navStep,
         setNavStep,
-
         paused,
         setPaused,
-
         sosActive,
         setSosActive,
       }}

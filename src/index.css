@@ -101,53 +101,7 @@ body {
   z-index: 10 !important;
 }
 
-/* ACCESSNAV LARGE TEXT ACCESSIBILITY */
-
-html.large-text {
-  font-size: 120% !important;
-}
-
-html.large-text body {
-  font-size: 1.1rem;
-}
-
-html.large-text button,
-html.large-text input,
-html.large-text textarea,
-html.large-text select {
-  font-size: inherit;
-}
-
-/* =========================================
-  ACCESSNAV - LARGE TEXT ACCESSIBILITY
-========================================= */
-
-html.large-text {
-  font-size: 120% !important;
-}
-
-html.large-text body {
-  font-size: 1.1rem;
-}
-
-/* Form elements */
-html.large-text button,
-html.large-text input,
-html.large-text textarea,
-html.large-text select {
-  font-size: inherit;
-}
-
-/* Improve readability of common text elements */
-html.large-text p,
-html.large-text span,
-html.large-text label,
-html.large-text li {
-  line-height: 1.6;
-}
-
 /* ACCESSNAV - LARGE TEXT ACCESSIBILITY */
-
 html.large-text {
   font-size: 120% !important;
 }
@@ -170,5 +124,3 @@ html.large-text label,
 html.large-text li {
   line-height: 1.6;
 }
-
-

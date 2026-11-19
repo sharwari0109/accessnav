@@ -544,6 +544,8 @@ export default function Routes() {
           'Unable to get current location:',
           error,
         );
+        console.log('LOCATION ERROR CODE:', error.code);
+console.log('LOCATION ERROR MESSAGE:', error.message);
 
         console.log(
           'LOCATION ERROR:',
@@ -1109,16 +1111,15 @@ useEffect(() => {
             )}
           </div>
 
-          <div className="min-w-0">
-            <h1 className="text-xl font-extrabold text-slate-900">
-              Choose a Route
-            </h1>
-
-            <p className="truncate text-base text-slate-500">
-              {destination.name}
-            </p>
-          </div>
-        </div>
+    <div className="min-w-0">
+      <h1 className="text-xl font-extrabold text-slate-900">
+        Choose a Route
+      </h1>
+      <p className="truncate text-base text-slate-500">
+        {destination.name}
+      </p>
+    </div>
+  </div>
 
         {/* START AND DESTINATION */}
 

@@ -51,8 +51,8 @@ export default function Profile() {
         'Avoid complicated intersections',
       ]);
     } else {
-      setPreferences((previous) => [
-        ...previous.filter((item) =>
+      setPreferences((previous) =>
+        previous.filter((item) =>
           [
             'Most accessible route',
             'Avoid stairs',
@@ -60,8 +60,8 @@ export default function Profile() {
             'Prefer elevators',
             'Avoid steep slopes',
           ].includes(item)
-        ),
-      ]);
+        )
+      );
     }
   };
 
@@ -70,16 +70,13 @@ export default function Profile() {
 
   return (
     <div className="screen-enter flex h-full w-full flex-col bg-slate-50">
-
       <TopBar
         title="My Profile"
         onBack={() => go('home')}
       />
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-24 pt-16">
-
         <div className="flex flex-col items-center">
-
           <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary-600 text-2xl font-extrabold text-white shadow-card">
             {user?.name
               ? user.name.charAt(0).toUpperCase()
@@ -93,13 +90,10 @@ export default function Profile() {
           <p className="text-sm text-slate-500">
             {user?.email || ''}
           </p>
-
         </div>
 
         <Section title="Accessibility">
-
           <div className="flex gap-2">
-
             {(['wheelchair', 'lowvision'] as const).map(
               (currentMode) => (
                 <button
@@ -129,7 +123,6 @@ export default function Profile() {
                 </button>
               )
             )}
-
           </div>
 
           <button
@@ -138,11 +131,9 @@ export default function Profile() {
           >
             Edit Preferences
           </button>
-
         </Section>
 
         <Section title="Navigation">
-
           <Row
             label="Most accessible route"
             on={hasPreference('Most accessible route')}
@@ -196,11 +187,9 @@ export default function Profile() {
               />
             </>
           )}
-
         </Section>
 
         <Section title="App">
-
           <Row
             label="Large text"
             on={largeText}
@@ -218,7 +207,6 @@ export default function Profile() {
             on={voiceGuidance}
             onChange={() => setVoiceGuidance(!voiceGuidance)}
           />
-
         </Section>
 
         <div className="mt-6">
@@ -229,11 +217,9 @@ export default function Profile() {
             Logout
           </button>
         </div>
-
       </div>
 
       <BottomNav />
-
     </div>
   );
 }
