@@ -1,3 +1,4 @@
+
 import {
   useEffect,
   useMemo,
@@ -32,8 +33,11 @@ import {
   getAccessibilityRoutes,
   getPlaceAccessibility,
   getAccessibilityRoutesByLocation,
+  analyzeAccessibilityRouteByLocation,
+  analyzeAccessibilityRoute,
   type AccessibilityMode,
   type BackendRoute,
+  type AnalyzedRoute,
   type PlaceAccessibility,
 } from '@/api';
 
@@ -94,20 +98,16 @@ interface RouteCard {
   coordinates: [number, number][];
 }
 
-const DEFAULT_ROUTE_METADATA: Record<
-  RouteId,
-  RouteMetadata
-> = {
+const DEFAULT_ROUTE_METADATA: Record<RouteId, RouteMetadata> = {
   accessible: {
     title: 'Accessible Route',
     emoji: '♿',
-    tag: '🟢 Verified accessibility data',
+    tag: 'Accessibility information available',
     features: [
       'Accessibility information available',
       'Accessibility-focused route',
     ],
   },
-
   fastest: {
     title: 'Fastest Route',
     emoji: '⚡',
@@ -117,7 +117,6 @@ const DEFAULT_ROUTE_METADATA: Record<
       'Fastest available road route',
     ],
   },
-
   clear: {
     title: 'Clear Route',
     emoji: '👁',
@@ -129,162 +128,96 @@ const DEFAULT_ROUTE_METADATA: Record<
   },
 };
 
-const destinationIcon =
-  L.divIcon({
-    className:
-      'accessnav-route-destination',
-    html: `
-      <div
-        style="
-          width:48px;
-          height:48px;
-          border-radius:50%;
-          background:#ef4444;
-          border:5px solid white;
-          box-shadow:0 4px 18px rgba(0,0,0,.35);
-          display:flex;
-          align-items:center;
-          justify-content:center;
-          color:white;
-          font-size:24px;
-          font-weight:700;
-        "
-        aria-label="Destination"
-      >
-        📍
-      </div>
-    `,
-    iconSize: [48, 48],
-    iconAnchor: [24, 24],
-  });
+const destinationIcon = L.divIcon({
+  className: 'accessnav-route-destination',
+  html: `
+    <div style="
+      width:48px;
+      height:48px;
+      border-radius:50%;
+      background:#ef4444;
+      border:5px solid white;
+      box-shadow:0 4px 18px rgba(0,0,0,.35);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      color:white;
+      font-size:24px;
+      font-weight:700;
+    ">📍</div>
+  `,
+  iconSize: [48, 48],
+  iconAnchor: [24, 24],
+});
 
-const currentLocationIcon =
-  L.divIcon({
-    className:
-      'accessnav-current-location',
-    html: `
-      <div
-        style="
-          width:24px;
-          height:24px;
-          border-radius:50%;
-          background:#2563eb;
-          border:4px solid white;
-          box-shadow:0 2px 10px rgba(0,0,0,.35);
-        "
-        aria-label="Current location"
-      ></div>
-    `,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12],
-  });
+const currentLocationIcon = L.divIcon({
+  className: 'accessnav-current-location',
+  html: `
+    <div style="
+      width:24px;
+      height:24px;
+      border-radius:50%;
+      background:#2563eb;
+      border:4px solid white;
+      box-shadow:0 2px 10px rgba(0,0,0,.35);
+    "></div>
+  `,
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+});
 
-  function MapController({
-    currentLocation,
-    destination,
-    routeCoordinates,
-  }: {
-    currentLocation: [number, number] | null;
-    destination: [number, number];
-    routeCoordinates: [number, number][];
-  }) {
-    const map = useMap();
-  
-    useEffect(() => {
-      if (routeCoordinates.length > 1) {
-        const bounds = L.latLngBounds(
-          routeCoordinates,
-        );
-  
-        map.fitBounds(bounds, {
-          padding: [40, 40],
-          maxZoom: 15,
-          animate: true,
-        });
-  
-        return;
-      }
-  
-      if (!currentLocation) {
-        map.flyTo(destination, 15, {
-          duration: 0.8,
-        });
-  
-        return;
-      }
-  
-      const bounds = L.latLngBounds([
-        currentLocation,
-        destination,
-      ]);
-  
-      map.fitBounds(bounds, {
+function MapController({
+  currentLocation,
+  destination,
+  routeCoordinates,
+}: {
+  currentLocation: [number, number] | null;
+  destination: [number, number];
+  routeCoordinates: [number, number][];
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (routeCoordinates.length > 1) {
+      map.fitBounds(L.latLngBounds(routeCoordinates), {
         padding: [40, 40],
         maxZoom: 15,
         animate: true,
       });
-    }, [
-      currentLocation,
-      destination,
-      routeCoordinates,
-      map,
-    ]);
-  
-    return null;
-  }
+      return;
+    }
 
-function formatDistance(
-  meters: number,
-): string {
-  if (meters < 1000) {
-    return `${Math.round(meters)} m`;
-  }
+    if (!currentLocation) {
+      map.flyTo(destination, 15, {
+        duration: 0.8,
+      });
+      return;
+    }
 
-  return `${(
-    meters / 1000
-  ).toFixed(1)} km`;
-}
+    map.fitBounds(
+      L.latLngBounds([currentLocation, destination]),
+      {
+        padding: [40, 40],
+        maxZoom: 15,
+        animate: true,
+      },
+    );
+  }, [currentLocation, destination, routeCoordinates, map]);
 
-function formatDuration(
-  seconds: number,
-): string {
-  const minutes = Math.max(
-    1,
-    Math.round(seconds / 60),
-  );
-
-  if (minutes < 60) {
-    return `${minutes} min`;
-  }
-
-  const hours =
-    Math.floor(minutes / 60);
-
-  const remaining =
-    minutes % 60;
-
-  if (remaining === 0) {
-    return `${hours} hr`;
-  }
-
-  return `${hours} hr ${remaining} min`;
+  return null;
 }
 
 function getBackendRoute(
   routes: BackendRoute[] | null,
   id: RouteId,
 ): BackendRoute | null {
-  if (!routes) {
-    return null;
-  }
+  if (!routes) return null;
 
   return (
     routes.find(
       (route) =>
         route.id === id ||
-        route.title
-          ?.toLowerCase()
-          .includes(id),
+        route.title?.toLowerCase().includes(id),
     ) ?? null
   );
 }
@@ -294,50 +227,41 @@ function getRouteMetadata(
   id: RouteId,
   hasAccessibilityData: boolean,
 ): RouteMetadata {
-  const backendRoute =
-    getBackendRoute(
-      routes,
-      id,
-    );
+  const backendRoute = getBackendRoute(routes, id);
 
   if (backendRoute) {
     return {
       title:
         backendRoute.title ||
-        DEFAULT_ROUTE_METADATA[id] 
-        .title,
+        DEFAULT_ROUTE_METADATA[id].title,
 
-        emoji:
+      emoji:
         backendRoute.emoji ||
         DEFAULT_ROUTE_METADATA[id].emoji,
 
-        tag:
-  hasAccessibilityData &&
-  id === 'accessible'
-    ? '🟢 Verified accessibility data'
-    : DEFAULT_ROUTE_METADATA[id].tag,
+      tag:
+        hasAccessibilityData && id === 'accessible'
+          ? 'Accessibility information available'
+          : DEFAULT_ROUTE_METADATA[id].tag,
 
-    features:
-  backendRoute.features &&
-  backendRoute.features.length > 0
-    ? backendRoute.features.map((feature) =>
-        typeof feature === 'string'
-          ? feature
-          : typeof feature === 'object' &&
-              feature !== null &&
-              'text' in feature &&
-              typeof feature.text === 'string'
-            ? feature.text
-            : String(feature),
-      )
-    : DEFAULT_ROUTE_METADATA[id].features,
+      features:
+        backendRoute.features &&
+        backendRoute.features.length > 0
+          ? backendRoute.features.map((feature) =>
+              typeof feature === 'string'
+                ? feature
+                : typeof feature === 'object' &&
+                    feature !== null &&
+                    'text' in feature &&
+                    typeof feature.text === 'string'
+                  ? feature.text
+                  : String(feature),
+            )
+          : DEFAULT_ROUTE_METADATA[id].features,
     };
   }
 
-  if (
-    hasAccessibilityData &&
-    id === 'accessible'
-  ) {
+  if (hasAccessibilityData && id === 'accessible') {
     return {
       title: 'Most Accessible',
       emoji: '♿',
@@ -355,17 +279,14 @@ function getRouteMetadata(
 function getAccessibilityFeatureList(
   accessibility: PlaceAccessibility | null,
 ): string[] {
-  if (!accessibility) {
-    return [];
-  }
+  if (!accessibility) return [];
 
   const features: string[] = [];
 
-  const data =
-    accessibility as unknown as Record<
-      string,
-      unknown
-    >;
+  const data = accessibility as unknown as Record<
+    string,
+    unknown
+  >;
 
   const possibleFeatures = [
     'features',
@@ -379,19 +300,14 @@ function getAccessibilityFeatureList(
 
     if (Array.isArray(value)) {
       for (const item of value) {
-        if (
-          typeof item === 'string' &&
-          item.trim()
-        ) {
+        if (typeof item === 'string' && item.trim()) {
           features.push(item);
         }
       }
     }
   }
 
-  return Array.from(
-    new Set(features),
-  );
+  return Array.from(new Set(features));
 }
 
 function RouteMap({
@@ -405,9 +321,7 @@ function RouteMap({
   selectedRoute: RouteId;
   routeCoordinates: [number, number][];
 }) {
-  const center =
-    currentLocation ??
-    destinationPoint;
+  const center = currentLocation ?? destinationPoint;
 
   return (
     <div className="relative h-[400px] w-full overflow-hidden bg-slate-200">
@@ -422,65 +336,40 @@ function RouteMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-<MapController
-  currentLocation={currentLocation}
-  destination={destinationPoint}
-  routeCoordinates={routeCoordinates}
-/>
+        <MapController
+          currentLocation={currentLocation}
+          destination={destinationPoint}
+          routeCoordinates={routeCoordinates}
+        />
 
         {currentLocation && (
           <Marker
-            position={
-              currentLocation
-            }
-            icon={
-              currentLocationIcon
-            }
+            position={currentLocation}
+            icon={currentLocationIcon}
           />
         )}
 
         <Marker
-          position={
-            destinationPoint
-          }
-          icon={
-            destinationIcon
-          }
+          position={destinationPoint}
+          icon={destinationIcon}
         />
 
-console.log(
-  'ROUTE COORDINATES:',
-  routeCoordinates.length,
-  routeCoordinates,
-);
-
-        {routeCoordinates.length >
-          1 && (
+        {routeCoordinates.length > 1 && (
           <Polyline
-            positions={
-              routeCoordinates
-            }
+            positions={routeCoordinates}
             pathOptions={{
               color:
-                selectedRoute ===
-                'accessible'
+                selectedRoute === 'accessible'
                   ? '#2563eb'
-                  : selectedRoute ===
-                      'fastest'
+                  : selectedRoute === 'fastest'
                     ? '#7c3aed'
                     : '#f59e0b',
-
               weight: 7,
-
               opacity: 0.9,
-
               lineCap: 'round',
-
               lineJoin: 'round',
-
               dashArray:
-                selectedRoute ===
-                'clear'
+                selectedRoute === 'clear'
                   ? '12 8'
                   : undefined,
             }}
@@ -489,23 +378,22 @@ console.log(
       </MapContainer>
 
       <div className="absolute left-3 top-3 z-[500] flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-lg">
-  <RouteIcon
-    size={17}
-    className="text-primary-600"
-  />
+        <RouteIcon
+          size={17}
+          className="text-primary-600"
+        />
 
-  {routeCoordinates.length > 1
-    ? selectedRoute === 'accessible'
-      ? '♿ Accessible route'
-      : selectedRoute === 'clear'
-        ? '👁 Clear route'
-        : '⚡ Fastest route'
-    : 'Calculating route...'}
-</div>
+        {routeCoordinates.length > 1
+          ? selectedRoute === 'accessible'
+            ? '♿ Accessible route'
+            : selectedRoute === 'clear'
+              ? '👁 Clear route'
+              : '⚡ Fastest route'
+          : 'Calculating route...'}
+      </div>
 
       <div className="absolute bottom-2 right-2 z-[500] rounded bg-white/90 px-2 py-1 text-[10px] text-slate-500 shadow">
-        Leaflet | © OpenStreetMap
-        contributors
+        Leaflet | © OpenStreetMap contributors
       </div>
     </div>
   );
@@ -517,17 +405,14 @@ export default function Routes() {
     startLocation,
     setStartLocation,
     mode,
+    preferences,
     selectedRoute,
     setSelectedRoute,
     go,
   } = useApp();
 
-  const [
-    currentLocation,
-    setCurrentLocation,
-  ] = useState<
-    [number, number] | null
-  >(null);
+  const [currentLocation, setCurrentLocation] =
+    useState<[number, number] | null>(null);
 
   const routeOrigin = useMemo<[number, number] | null>(
     () =>
@@ -537,297 +422,96 @@ export default function Routes() {
     [startLocation, currentLocation],
   );
 
+  const [locationLoading, setLocationLoading] =
+    useState(true);
 
-  const [
-    locationLoading,
-    setLocationLoading,
-  ] = useState(true);
+  const [locationError, setLocationError] =
+    useState('');
 
-  const [
-    locationError,
-    setLocationError,
-  ] = useState('');
+  const [startSearchQuery, setStartSearchQuery] =
+    useState('');
 
-  const [startSearchQuery, setStartSearchQuery] = useState('');
-const [startSearchResults, setStartSearchResults] = useState<
-  {
-    id: string;
-    name: string;
-    displayName: string;
-    lat: number;
-    lng: number;
-    area: string;
-  }[]
->([]);
-const [searchingStart, setSearchingStart] = useState(false);
-const [startSearchError, setStartSearchError] = useState('');
+  const [startSearchResults, setStartSearchResults] =
+    useState<
+      {
+        id: string;
+        name: string;
+        displayName: string;
+        lat: number;
+        lng: number;
+        area: string;
+      }[]
+    >([]);
 
-  const [
-    backendRoutes,
-    setBackendRoutes,
-  ] = useState<
-    BackendRoute[] | null
-  >(null);
+  const [searchingStart, setSearchingStart] =
+    useState(false);
+
+  const [startSearchError, setStartSearchError] =
+    useState('');
+
+  const [backendRoutes, setBackendRoutes] =
+    useState<BackendRoute[] | null>(null);
+
+  const [analyzedRoutes, setAnalyzedRoutes] =
+    useState<AnalyzedRoute[]>([]);
 
   const [
     nearbyAccessibilitySource,
     setNearbyAccessibilitySource,
-  ] =
-    useState<{
-      placeId?: string;
-      placeName?: string;
-      distanceKm?: number;
-    } | null>(null);
+  ] = useState<{
+    placeId?: string;
+    placeName?: string;
+    distanceKm?: number;
+  } | null>(null);
 
-  const [
-    placeAccessibility,
-    setPlaceAccessibility,
-  ] =
-    useState<PlaceAccessibility | null>(
-      null,
-    );
+  const [placeAccessibility, setPlaceAccessibility] =
+    useState<PlaceAccessibility | null>(null);
 
-  const [
-    accessibilityLoading,
-    setAccessibilityLoading,
-  ] = useState(false);
+  const [accessibilityLoading, setAccessibilityLoading] =
+    useState(false);
 
-  const [
-    accessibilityError,
-    setAccessibilityError,
-  ] = useState('');
+  const [accessibilityError, setAccessibilityError] =
+    useState('');
 
-  const [
-    osrmRoutes,
-    setOsrmRoutes,
-  ] = useState<OsrmRoute[]>([]);
+  const [osrmRoutes, setOsrmRoutes] =
+    useState<OsrmRoute[]>([]);
 
-  const [
-    routeLoading,
-    setRouteLoading,
-  ] = useState(false);
+  const [routeLoading, setRouteLoading] =
+    useState(false);
 
-  const [
-    routeError,
-    setRouteError,
-  ] = useState('');
-
+  const [routeError, setRouteError] =
+    useState('');
 
   const [routeSteps, setRouteSteps] =
-  useState<OsrmStep[]>([]);
+    useState<OsrmStep[]>([]);
 
   const [currentStepIndex, setCurrentStepIndex] =
-  useState(0);
+    useState(0);
 
   const currentStep =
-  routeSteps[currentStepIndex] ?? null;
+    routeSteps[currentStepIndex] ?? null;
 
- const nextStep =
-  routeSteps[currentStepIndex + 1] ?? null;
-
-  if (!destination) {
-    return (
-      <div className="flex h-full w-full items-center justify-center bg-slate-100 px-6">
-        <div className="w-full rounded-3xl bg-white p-6 text-center shadow-card">
-          <MapPin
-            size={36}
-            className="mx-auto text-primary-600"
-          />
-
-          <h2 className="mt-4 text-xl font-extrabold text-slate-900">
-            No destination selected
-          </h2>
-
-          <p className="mt-2 text-sm text-slate-500">
-            Please select a destination
-            before choosing a route.
-          </p>
-
-          <button
-            type="button"
-            onClick={() =>
-              go('search')
-            }
-            className="mt-5 w-full rounded-2xl bg-primary-600 px-5 py-3.5 font-bold text-white"
-          >
-            Search for a destination
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const nextStep =
+    routeSteps[currentStepIndex + 1] ?? null;
 
   const destinationPoint:
     | [number, number]
     | null =
+    destination &&
     Number.isFinite(destination.lat) &&
     Number.isFinite(destination.lng)
-      ? [
-          destination.lat,
-          destination.lng,
-        ]
+      ? [destination.lat, destination.lng]
       : null;
 
   const destinationPlaceId =
-    destination.place?.id ??
-    null;
+    destination?.place?.id ?? null;
 
-
-    const hasAccessibilityData =
+  const hasAccessibilityData =
     placeAccessibility !== null ||
-    (backendRoutes !== null &&
-      backendRoutes.length > 0);
-
-    useEffect(() => {
-      let cancelled = false;
-  
-      async function loadAccessibilityData() {
-        if (!destination) {
-          setBackendRoutes(null);
-          setPlaceAccessibility(null);
-          setAccessibilityError('');
-          setAccessibilityLoading(false);
-          return;
-        }
-  
-        try {
-          setAccessibilityLoading(true);
-          setAccessibilityError('');
-  
-          // Destination exists in our accessibility database
-          if (destinationPlaceId) {
-            const [
-              accessibility,
-              routes,
-            ] = await Promise.all([
-              getPlaceAccessibility(
-                destinationPlaceId,
-              ),
-  
-              getAccessibilityRoutes(
-                destinationPlaceId,
-                mode as AccessibilityMode,
-              ),
-            ]);
-  
-            if (cancelled) {
-              return;
-            }
-  
-            setPlaceAccessibility(
-              accessibility,
-            );
-  
-            setBackendRoutes(
-              routes,
-            );
-  
-            return;
-          }
-  
-          // Destination came from map search.
-          // Use its coordinates instead.
-          if (
-            Number.isFinite(destination.lat) &&
-            Number.isFinite(destination.lng)
-          ) {
-
-            console.log(
-              'DESTINATION:',
-              destination,
-            );
-            
-            console.log(
-              'DESTINATION COORDINATES:',
-              destination.lat,
-              destination.lng,
-            ); 
-
-            const response =
-  await getAccessibilityRoutesByLocation(
-  destination.lat,
-  destination.lng,
-  mode as AccessibilityMode,
-  3,
-);
-
-console.log(
-  'ACCESSIBILITY BY LOCATION RESPONSE:',
-  response,
-);
-
-if (cancelled) {
-  return;
-}
-if (cancelled) {
-  return;
-}
-
-setPlaceAccessibility(null);
-
-setBackendRoutes(
-  response.routes ?? [],
-);
-
-setNearbyAccessibilitySource(
-  response.sourcePlaceId
-    ? {
-        placeId:
-          response.sourcePlaceId,
-        placeName:
-          response.sourcePlaceName,
-        distanceKm:
-          response.sourceDistanceKm,
-      }
-    : null,
-);
-
-return;
-
-          }
-  
-          setBackendRoutes(null);
-          setPlaceAccessibility(null);
-  
-        } catch (error) {
-          if (cancelled) {
-            return;
-          }
-  
-          console.error(
-            'Failed to load accessibility data:',
-            error,
-          );
-  
-          setAccessibilityError(
-            'Accessibility information could not be loaded. Standard road routing is still available.',
-          );
-  
-          setBackendRoutes(null);
-          setPlaceAccessibility(null);
-  
-        } finally {
-          if (!cancelled) {
-            setAccessibilityLoading(false);
-          }
-        }
-      }
-  
-      loadAccessibilityData();
-  
-      return () => {
-        cancelled = true;
-      };
-    }, [
-      destination,
-      destinationPlaceId,
-      mode,
-    ]);
+    (backendRoutes !== null && backendRoutes.length > 0);
 
   /*
-   * -------------------------------------------------------
    * CURRENT LOCATION
-   * -------------------------------------------------------
    */
 
   useEffect(() => {
@@ -835,19 +519,15 @@ return;
 
     if (!navigator.geolocation) {
       setLocationLoading(false);
-
       setLocationError(
         'Location services are not available in this browser.',
       );
-
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
         setCurrentLocation([
           position.coords.latitude,
@@ -858,9 +538,7 @@ return;
         setLocationError('');
       },
       (error) => {
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
         console.error(
           'Unable to get current location:',
@@ -868,6 +546,12 @@ return;
         );
         console.log('LOCATION ERROR CODE:', error.code);
 console.log('LOCATION ERROR MESSAGE:', error.message);
+
+        console.log(
+          'LOCATION ERROR:',
+          error.code,
+          error.message,
+        );
 
         setLocationLoading(false);
 
@@ -887,45 +571,53 @@ console.log('LOCATION ERROR MESSAGE:', error.message);
     };
   }, []);
 
+  /*
+   * START LOCATION SEARCH
+   */
+
   useEffect(() => {
     const query = startSearchQuery.trim();
-  
+
     if (query.length < 3) {
       setStartSearchResults([]);
       setStartSearchError('');
       setSearchingStart(false);
       return;
     }
-  
+
     const controller = new AbortController();
-  
+
     const timeout = window.setTimeout(async () => {
       try {
         setSearchingStart(true);
         setStartSearchError('');
-  
+
         const url =
           `https://nominatim.openstreetmap.org/search` +
           `?format=jsonv2` +
           `&q=${encodeURIComponent(query)}` +
           `&limit=5` +
           `&addressdetails=1`;
-  
+
         const response = await fetch(url, {
           signal: controller.signal,
-          headers: { Accept: 'application/json' },
+          headers: {
+            Accept: 'application/json',
+          },
         });
-  
+
         if (!response.ok) {
           throw new Error('Location search failed');
         }
-  
+
         const data = await response.json();
-  
+
         const results = data
           .map((item: any) => ({
             id: `osm-${item.place_id}`,
-            name: item.name || item.display_name.split(',')[0],
+            name:
+              item.name ||
+              item.display_name.split(',')[0],
             displayName: item.display_name,
             lat: Number(item.lat),
             lng: Number(item.lon),
@@ -941,13 +633,20 @@ console.log('LOCATION ERROR MESSAGE:', error.message);
               Number.isFinite(item.lat) &&
               Number.isFinite(item.lng),
           );
-  
+
         setStartSearchResults(results);
       } catch (error) {
         if (controller.signal.aborted) return;
-  
-        console.error('Start location search failed:', error);
-        setStartSearchError('Unable to search locations.');
+
+        console.error(
+          'Start location search failed:',
+          error,
+        );
+
+        setStartSearchError(
+          'Unable to search locations.',
+        );
+
         setStartSearchResults([]);
       } finally {
         if (!controller.signal.aborted) {
@@ -955,7 +654,7 @@ console.log('LOCATION ERROR MESSAGE:', error.message);
         }
       }
     }, 500);
-  
+
     return () => {
       window.clearTimeout(timeout);
       controller.abort();
@@ -963,143 +662,101 @@ console.log('LOCATION ERROR MESSAGE:', error.message);
   }, [startSearchQuery]);
 
   /*
-   * -------------------------------------------------------
    * ACCESSIBILITY DATA
-   *
-   * Only known AccessMob places have accessibility
-   * information. Arbitrary map-search destinations
-   * intentionally skip these calls.
-   * -------------------------------------------------------
    */
 
   useEffect(() => {
     let cancelled = false;
-  
+
     async function loadAccessibilityData() {
-      /*
-       * We always need a destination.
-       */
       if (!destination) {
         setBackendRoutes(null);
         setPlaceAccessibility(null);
+        setNearbyAccessibilitySource(null);
         setAccessibilityError('');
         setAccessibilityLoading(false);
         return;
       }
-  
+
       try {
         setAccessibilityLoading(true);
         setAccessibilityError('');
-  
-        /*
-         * =====================================================
-         * CASE 1:
-         * Destination exists in our accessibility database
-         * =====================================================
-         */
+
         if (destinationPlaceId) {
-          const [
-            accessibility,
-            routes,
-          ] = await Promise.all([
-            getPlaceAccessibility(
-              destinationPlaceId,
-            ),
-  
-            getAccessibilityRoutes(
-              destinationPlaceId,
-              mode as AccessibilityMode,
-            ),
-          ]);
-  
-          if (cancelled) {
-            return;
-          }
-  
-          setPlaceAccessibility(
-            accessibility,
-          );
-  
-          setBackendRoutes(
-            routes,
-          );
-  
+          const [accessibility, routes] =
+            await Promise.all([
+              getPlaceAccessibility(destinationPlaceId),
+              getAccessibilityRoutes(
+                destinationPlaceId,
+                mode as AccessibilityMode,
+              ),
+            ]);
+
+          if (cancelled) return;
+
+          setPlaceAccessibility(accessibility);
+          setBackendRoutes(routes);
+          setNearbyAccessibilitySource(null);
+
           return;
         }
-  
-        /*
-         * =====================================================
-         * CASE 2:
-         * Destination came from map search
-         *
-         * It may not exist in our MongoDB accessibility
-         * database, so we use its coordinates instead.
-         * =====================================================
-         */
+
         if (
           Number.isFinite(destination.lat) &&
           Number.isFinite(destination.lng)
         ) {
           const response =
-  await getAccessibilityRoutesByLocation(
-    destination.lat,
-    destination.lng,
-    mode as AccessibilityMode,
-    1,
-  );
+            await getAccessibilityRoutesByLocation(
+              destination.lat,
+              destination.lng,
+              mode as AccessibilityMode,
+              3,
+            );
 
-if (cancelled) {
-  return;
-}
+          if (cancelled) return;
 
-setBackendRoutes(response.routes);
-  
-          /*
-           * There is no specific PlaceAccessibility record
-           * for an arbitrary searched location.
-           */
           setPlaceAccessibility(null);
+          setBackendRoutes(response.routes ?? []);
 
-setBackendRoutes(
-  response.routes,
-);
+          setNearbyAccessibilitySource(
+            response.sourcePlaceId
+              ? {
+                  placeId: response.sourcePlaceId,
+                  placeName: response.sourcePlaceName,
+                  distanceKm: response.sourceDistanceKm,
+                }
+              : null,
+          );
 
-return;
-        }
-  
-        /*
-         * Destination exists but has neither a place ID
-         * nor usable coordinates.
-         */
-        setBackendRoutes(null);
-        setPlaceAccessibility(null);
-  
-      } catch (error) {
-        if (cancelled) {
           return;
         }
-  
+
+        setBackendRoutes(null);
+        setPlaceAccessibility(null);
+        setNearbyAccessibilitySource(null);
+      } catch (error) {
+        if (cancelled) return;
+
         console.error(
           'Failed to load accessibility data:',
           error,
         );
-  
+
         setAccessibilityError(
           'Accessibility information could not be loaded. Standard road routing is still available.',
         );
-  
+
         setBackendRoutes(null);
         setPlaceAccessibility(null);
-  
       } finally {
         if (!cancelled) {
           setAccessibilityLoading(false);
         }
       }
     }
-  
+
     loadAccessibilityData();
-  
+
     return () => {
       cancelled = true;
     };
@@ -1109,13 +766,83 @@ return;
     mode,
   ]);
 
+
   /*
-   * -------------------------------------------------------
+   * PREFERENCE-BASED ACCESSIBILITY ANALYSIS
+   */
+
+  
+useEffect(() => {
+  let cancelled = false;
+
+  async function analyzePreferences() {
+    if (!destination || osrmRoutes.length === 0) {
+      setAnalyzedRoutes([]);
+      return;
+    }
+
+    const coordinates =
+      osrmRoutes[0]?.geometry.coordinates || [];
+
+    if (coordinates.length < 2) {
+      setAnalyzedRoutes([]);
+      return;
+    }
+
+    try {
+      setAccessibilityLoading(true);
+
+      const requestData = {
+        mode: mode as AccessibilityMode,
+        preferences: preferences || [],
+        routeCoordinates: coordinates,
+      };
+
+      const response = destinationPlaceId
+        ? await analyzeAccessibilityRoute(
+            destinationPlaceId,
+            requestData,
+          )
+        : await analyzeAccessibilityRouteByLocation({
+            ...requestData,
+            latitude: destination.lat,
+            longitude: destination.lng,
+          });
+
+      if (cancelled) return;
+
+      setAnalyzedRoutes(response.routes ?? []);
+
+      console.log('PREFERENCE ANALYSIS:', response);
+    } catch (error) {
+      if (cancelled) return;
+
+      console.error('Preference analysis failed:', error);
+      setAnalyzedRoutes([]);
+    } finally {
+      if (!cancelled) {
+        setAccessibilityLoading(false);
+      }
+    }
+  }
+
+  analyzePreferences();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  destination,
+  destinationPlaceId,
+  mode,
+  preferences,
+  osrmRoutes,
+]);
+
+
+
+  /*
    * STANDARD ROAD ROUTING
-   *
-   * This is intentionally independent of accessibility
-   * data so ANY destination can be routed.
-   * -------------------------------------------------------
    */
 
   useEffect(() => {
@@ -1128,7 +855,6 @@ return;
         setRouteError(
           'This destination does not have valid coordinates.',
         );
-
         return;
       }
 
@@ -1139,18 +865,16 @@ return;
 
         const [currentLat, currentLng] = routeOrigin;
 
-        const [
-          destinationLat,
-          destinationLng,
-        ] = destinationPoint;
+        const [destinationLat, destinationLng] =
+          destinationPoint;
 
         const url =
-  `https://router.project-osrm.org/route/v1/driving/` +
-  `${currentLng},${currentLat};` +
-  `${destinationLng},${destinationLat}` +
-  `?overview=full&geometries=geojson&alternatives=true&steps=true`;
-        const response =
-          await fetch(url);
+          `https://router.project-osrm.org/route/v1/driving/` +
+          `${currentLng},${currentLat};` +
+          `${destinationLng},${destinationLat}` +
+          `?overview=full&geometries=geojson&alternatives=true&steps=true`;
+
+        const response = await fetch(url);
 
         if (!response.ok) {
           throw new Error(
@@ -1160,47 +884,34 @@ return;
 
         const data =
           (await response.json()) as OsrmResponse;
-          console.log(
-            'OSRM ROUTE STEPS:',
-            data.routes?.[0]?.legs?.[0]?.steps,
-          );
+
+        console.log(
+          'OSRM ROUTE STEPS:',
+          data.routes?.[0]?.legs?.[0]?.steps,
+        );
 
         if (
-          !Array.isArray(
-            data.routes,
-          ) ||
+          !Array.isArray(data.routes) ||
           data.routes.length === 0
         ) {
-          throw new Error(
-            'No road route was found.',
-          );
+          throw new Error('No road route was found.');
         }
 
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
-        setOsrmRoutes(
-  data.routes.slice(0, 3),
-);
+        setOsrmRoutes(data.routes.slice(0, 3));
 
-const steps =
-  data.routes[0]?.legs?.flatMap(
-    (leg) => leg.steps ?? [],
-  ) ?? [];
+        const steps =
+          data.routes[0]?.legs?.flatMap(
+            (leg) => leg.steps ?? [],
+          ) ?? [];
 
-setRouteSteps(steps);
-setCurrentStepIndex(0);
-
+        setRouteSteps(steps);
+        setCurrentStepIndex(0);
       } catch (error) {
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
-        console.error(
-          'OSRM routing failed:',
-          error,
-        );
+        console.error('OSRM routing failed:', error);
 
         setRouteError(
           'Unable to calculate a road route right now.',
@@ -1217,149 +928,106 @@ setCurrentStepIndex(0);
     return () => {
       cancelled = true;
     };
-  }, [routeOrigin, destinationPoint?.[0], destinationPoint?.[1]]);
+  }, [
+    routeOrigin,
+    destinationPoint?.[0],
+    destinationPoint?.[1],
+  ]);
 
   /*
-   * -------------------------------------------------------
    * BUILD ROUTE CARDS
-   * -------------------------------------------------------
    */
-  console.log(
-    'BACKEND ROUTES IN CARD BUILDER:',
+
+  const routeCards = useMemo<RouteCard[]>(() => {
+    const cards: RouteCard[] = [];
+
+    const firstRoute = osrmRoutes[0] ?? null;
+    const secondRoute = osrmRoutes[1] ?? null;
+
+    if (firstRoute) {
+      const metadata = getRouteMetadata(
+        backendRoutes,
+        'accessible',
+        hasAccessibilityData,
+      );
+
+      cards.push({
+        id: 'accessible',
+        title: metadata.title,
+        emoji: metadata.emoji,
+        tag: metadata.tag,
+        features: metadata.features,
+        distanceKm: firstRoute.distance / 1000,
+        durationMin: firstRoute.duration / 60,
+        coordinates:
+          firstRoute.geometry.coordinates.map(
+            ([lng, lat]) => [lat, lng],
+          ),
+      });
+
+      const fastestMetadata = getRouteMetadata(
+        backendRoutes,
+        'fastest',
+        hasAccessibilityData,
+      );
+
+      cards.push({
+        id: 'fastest',
+        title: fastestMetadata.title,
+        emoji: fastestMetadata.emoji,
+        tag: fastestMetadata.tag,
+        features: fastestMetadata.features,
+        distanceKm: firstRoute.distance / 1000,
+        durationMin: firstRoute.duration / 60,
+        coordinates:
+          firstRoute.geometry.coordinates.map(
+            ([lng, lat]) => [lat, lng],
+          ),
+      });
+    }
+
+    if (secondRoute) {
+      const metadata = getRouteMetadata(
+        backendRoutes,
+        'clear',
+        hasAccessibilityData,
+      );
+
+      cards.push({
+        id: 'clear',
+        title: metadata.title,
+        emoji: metadata.emoji,
+        tag: metadata.tag,
+        features: metadata.features,
+        distanceKm: secondRoute.distance / 1000,
+        durationMin: secondRoute.duration / 60,
+        coordinates:
+          secondRoute.geometry.coordinates.map(
+            ([lng, lat]) => [lat, lng],
+          ),
+      });
+    }
+
+    return cards;
+  }, [
+    osrmRoutes,
     backendRoutes,
-  );
-  
-  console.log(
-    'HAS ACCESSIBILITY DATA:',
     hasAccessibilityData,
-  );
-
-
-  const routeCards =
-    useMemo<RouteCard[]>(() => {
-      const cards: RouteCard[] =
-        [];
-
-      const firstRoute =
-        osrmRoutes[0] ?? null;
-
-      const secondRoute =
-        osrmRoutes[1] ?? null;
-
-      if (firstRoute) {
-        const metadata =
-          getRouteMetadata(
-            backendRoutes,
-            'accessible',
-            hasAccessibilityData,
-          );
-
-        cards.push({
-          id: 'accessible',
-          title: metadata.title,
-          emoji: metadata.emoji,
-          tag: metadata.tag,
-          features: metadata.features,
-          distanceKm:
-            firstRoute.distance / 1000,
-          durationMin:
-            firstRoute.duration / 60,
-          coordinates:
-            firstRoute.geometry.coordinates.map(
-              ([lng, lat]) => [
-                lat,
-                lng,
-              ],
-            ),
-        });
-      }
-
-      if (firstRoute) {
-        const metadata =
-          getRouteMetadata(
-            backendRoutes,
-            'fastest',
-            hasAccessibilityData,
-          );
-
-        cards.push({
-          id: 'fastest',
-          title: metadata.title,
-          emoji: metadata.emoji,
-          tag: metadata.tag,
-          features: metadata.features,
-          distanceKm:
-            firstRoute.distance / 1000,
-          durationMin:
-            firstRoute.duration / 60,
-          coordinates:
-            firstRoute.geometry.coordinates.map(
-              ([lng, lat]) => [
-                lat,
-                lng,
-              ],
-            ),
-        });
-      }
-
-      if (secondRoute) {
-        const metadata =
-          getRouteMetadata(
-            backendRoutes,
-            'clear',
-            hasAccessibilityData,
-          );
-
-        cards.push({
-          id: 'clear',
-          title: metadata.title,
-          emoji: metadata.emoji,
-          tag: metadata.tag,
-          features: metadata.features,
-          distanceKm:
-            secondRoute.distance / 1000,
-          durationMin:
-            secondRoute.duration / 60,
-          coordinates:
-            secondRoute.geometry.coordinates.map(
-              ([lng, lat]) => [
-                lat,
-                lng,
-              ],
-            ),
-        });
-      }
-
-      return cards;
-    }, [
-      osrmRoutes,
-      backendRoutes,
-      hasAccessibilityData,
-    ]);
+  ]);
 
   /*
-   * -------------------------------------------------------
    * KEEP SELECTED ROUTE VALID
-   * -------------------------------------------------------
    */
 
   useEffect(() => {
-    if (
-      routeCards.length === 0
-    ) {
-      return;
-    }
+    if (routeCards.length === 0) return;
 
-    const exists =
-      routeCards.some(
-        (route) =>
-          route.id === selectedRoute,
-      );
+    const exists = routeCards.some(
+      (route) => route.id === selectedRoute,
+    );
 
     if (!exists) {
-      setSelectedRoute(
-        routeCards[0].id,
-      );
+      setSelectedRoute(routeCards[0].id);
     }
   }, [
     routeCards,
@@ -1369,52 +1037,79 @@ setCurrentStepIndex(0);
 
   const selectedRouteCard =
     routeCards.find(
-      (route) =>
-        route.id === selectedRoute,
+      (route) => route.id === selectedRoute,
     ) ??
     routeCards[0] ??
     null;
 
-  const accessibilityFeatures =
-    useMemo(
-      () =>
-        getAccessibilityFeatureList(
-          placeAccessibility,
-        ),
-      [placeAccessibility],
-    );
+  const accessibilityFeatures = useMemo(
+    () => getAccessibilityFeatureList(placeAccessibility),
+    [placeAccessibility],
+  );
 
   const visibleAccessibilityFeatures =
-    accessibilityFeatures.slice(
-      0,
-      6,
-    );
+    accessibilityFeatures.slice(0, 6);
 
   const selectedCoordinates =
-    selectedRouteCard
-      ?.coordinates ?? [];
+    selectedRouteCard?.coordinates ?? [];
 
   /*
-   * -------------------------------------------------------
+   * NO DESTINATION
+   */
+
+  if (!destination) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-slate-100 px-6">
+        <div className="w-full rounded-3xl bg-white p-6 text-center shadow-card">
+          <MapPin
+            size={36}
+            className="mx-auto text-primary-600"
+          />
+
+          <h2 className="mt-4 text-xl font-extrabold text-slate-900">
+            No destination selected
+          </h2>
+
+          <p className="mt-2 text-sm text-slate-500">
+            Please select a destination before choosing a route.
+          </p>
+
+          <button
+            type="button"
+            onClick={() => go('search')}
+            className="mt-5 w-full rounded-2xl bg-primary-600 px-5 py-3.5 font-bold text-white"
+          >
+            Search for a destination
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  /*
    * UI
-   * -------------------------------------------------------
    */
 
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-slate-50">
-      {/* =====================================================
-          HEADER
-      ===================================================== */}
 
-<div className="shrink-0 bg-white px-5 pb-4 pt-5 shadow-sm">
-  <div className="flex items-center gap-3">
-    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-100">
-      {mode === 'wheelchair' ? (
-        <Accessibility size={25} className="text-primary-700" />
-      ) : (
-        <Eye size={25} className="text-primary-700" />
-      )}
-    </div>
+      {/* HEADER */}
+
+      <div className="shrink-0 bg-white px-5 pb-4 pt-5 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-100">
+            {mode === 'wheelchair' ? (
+              <Accessibility
+                size={25}
+                className="text-primary-700"
+              />
+            ) : (
+              <Eye
+                size={25}
+                className="text-primary-700"
+              />
+            )}
+          </div>
 
     <div className="min-w-0">
       <h1 className="text-xl font-extrabold text-slate-900">
@@ -1426,121 +1121,120 @@ setCurrentStepIndex(0);
     </div>
   </div>
 
-  {/* Starting and destination locations */}
-  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-    <div className="flex items-center gap-3">
-      <div className="flex h-3 w-3 shrink-0 rounded-full border-2 border-primary-600" />
+        {/* START AND DESTINATION */}
 
-      <div className="min-w-0 flex-1">
-        <p className="text-xs font-semibold text-slate-500">
-          FROM
-        </p>
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-3 w-3 shrink-0 rounded-full border-2 border-primary-600" />
 
-        <p className="truncate text-sm font-bold text-slate-800">
-          {startLocation?.name || 'Your current location'}
-        </p>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-slate-500">
+                FROM
+              </p>
+
+              <p className="truncate text-sm font-bold text-slate-800">
+                {startLocation?.name || 'Your current location'}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setStartLocation(null);
+                setStartSearchQuery('');
+                setStartSearchResults([]);
+                setStartSearchError('');
+              }}
+              className="shrink-0 text-xs font-bold text-primary-700"
+            >
+              Use GPS
+            </button>
+          </div>
+
+          <div className="ml-1.5 my-2 h-5 border-l-2 border-dashed border-slate-300" />
+
+          <div className="flex items-center gap-3">
+            <MapPin
+              size={17}
+              className="shrink-0 text-red-500"
+            />
+
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-slate-500">
+                TO
+              </p>
+
+              <p className="truncate text-sm font-bold text-slate-800">
+                {destination.name}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-3 border-t border-slate-200 pt-3">
+            <input
+              type="text"
+              value={startSearchQuery}
+              onChange={(e) =>
+                setStartSearchQuery(e.target.value)
+              }
+              placeholder="Search another starting location"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none focus:border-primary-500"
+            />
+
+            {searchingStart && (
+              <p className="mt-2 text-xs text-slate-500">
+                Searching locations...
+              </p>
+            )}
+
+            {startSearchError && (
+              <p className="mt-2 text-xs text-red-600">
+                {startSearchError}
+              </p>
+            )}
+
+            {startSearchResults.map((result) => (
+              <button
+                key={result.id}
+                type="button"
+                onClick={() => {
+                  setStartLocation({
+                    name: result.name,
+                    lat: result.lat,
+                    lng: result.lng,
+                  });
+
+                  setStartSearchQuery('');
+                  setStartSearchResults([]);
+                  setStartSearchError('');
+                }}
+                className="mt-2 flex w-full flex-col items-start rounded-xl bg-white p-3 text-left hover:bg-primary-50"
+              >
+                <span className="text-sm font-bold text-slate-800">
+                  {result.name}
+                </span>
+
+                <span className="mt-1 text-xs text-slate-500">
+                  {result.displayName}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      <button
-        type="button"
-        onClick={() => {
-          setStartLocation(null);
-          setStartSearchQuery('');
-          setStartSearchResults([]);
-          setStartSearchError('');
-        }}
-        className="shrink-0 text-xs font-bold text-primary-700"
-      >
-        Use GPS
-      </button>
-    </div>
-
-    <div className="ml-1.5 my-2 h-5 border-l-2 border-dashed border-slate-300" />
-
-    <div className="flex items-center gap-3">
-      <MapPin size={17} className="shrink-0 text-red-500" />
-
-      <div className="min-w-0 flex-1">
-        <p className="text-xs font-semibold text-slate-500">
-          TO
-        </p>
-        <p className="truncate text-sm font-bold text-slate-800">
-          {destination.name}
-        </p>
-      </div>
-    </div>
-
-    <div className="mt-3 border-t border-slate-200 pt-3">
-      <input
-        type="text"
-        value={startSearchQuery}
-        onChange={(e) => setStartSearchQuery(e.target.value)}
-        placeholder="Search another starting location"
-        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none focus:border-primary-500"
-      />
-
-      {searchingStart && (
-        <p className="mt-2 text-xs text-slate-500">
-          Searching locations...
-        </p>
-      )}
-
-      {startSearchError && (
-        <p className="mt-2 text-xs text-red-600">
-          {startSearchError}
-        </p>
-      )}
-
-      {startSearchResults.map((result) => (
-        <button
-          key={result.id}
-          type="button"
-          onClick={() => {
-            setStartLocation({
-              name: result.name,
-              lat: result.lat,
-              lng: result.lng,
-            });
-            setStartSearchQuery('');
-            setStartSearchResults([]);
-            setStartSearchError('');
-          }}
-          className="mt-2 flex w-full flex-col items-start rounded-xl bg-white p-3 text-left hover:bg-primary-50"
-        >
-          <span className="text-sm font-bold text-slate-800">
-            {result.name}
-          </span>
-          <span className="mt-1 text-xs text-slate-500">
-            {result.displayName}
-          </span>
-        </button>
-      ))}
-    </div>
-  </div>
-</div>
-      {/* =====================================================
-          SCROLLABLE CONTENT
-      ===================================================== */}
+      {/* SCROLLABLE CONTENT */}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* ---------------------------------------------------
-            MAP
-        --------------------------------------------------- */}
+
+        {/* MAP */}
 
         {destinationPoint ? (
           <RouteMap
-          currentLocation={
-            routeOrigin
-          }
-            destinationPoint={
-              destinationPoint
-            }
-            selectedRoute={
-              selectedRoute
-            }
-            routeCoordinates={
-              selectedCoordinates
-            }
+            currentLocation={routeOrigin}
+            destinationPoint={destinationPoint}
+            selectedRoute={selectedRoute}
+            routeCoordinates={selectedCoordinates}
           />
         ) : (
           <div className="flex h-[400px] items-center justify-center bg-slate-200 px-6 text-center">
@@ -1551,22 +1245,19 @@ setCurrentStepIndex(0);
               />
 
               <p className="mt-3 font-bold text-slate-800">
-                Destination coordinates
-                unavailable
+                Destination coordinates unavailable
               </p>
 
               <p className="mt-1 text-sm text-slate-500">
-                We cannot calculate a
-                route for this location.
+                We cannot calculate a route for this location.
               </p>
             </div>
           </div>
         )}
 
         <div className="px-5 pb-6 pt-5">
-          {/* -------------------------------------------------
-              LOCATION STATUS
-          ------------------------------------------------- */}
+
+          {/* LOCATION STATUS */}
 
           {locationLoading && (
             <div className="mb-4 flex items-center gap-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm text-blue-700">
@@ -1574,104 +1265,26 @@ setCurrentStepIndex(0);
                 size={18}
                 className="animate-spin"
               />
-
-              Detecting your current
-              location...
+              Detecting your current location...
             </div>
           )}
 
-          {!locationLoading &&
-            locationError && (
-              <div className="mb-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                <div className="flex items-start gap-3">
-                  <AlertTriangle
-                    size={19}
-                    className="mt-0.5 shrink-0"
-                  />
-
-                  <span>
-                    {locationError}
-                  </span>
-                </div>
-              </div>
-            )}
-
-          {/* -------------------------------------------------
-              ACCESSIBILITY STATUS
-          ------------------------------------------------- */}
-
-{!destinationPlaceId &&
-  nearbyAccessibilitySource && (
-    <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-      <div className="flex items-start gap-3">
-        <ShieldCheck
-          size={22}
-          className="mt-0.5 shrink-0 text-emerald-600"
-        />
-
-        <div>
-          <h2 className="font-bold text-emerald-900">
-            Accessibility data found
-          </h2>
-
-          <p className="mt-1 text-sm leading-5 text-emerald-800">
-            Accessibility information was found
-            {nearbyAccessibilitySource.placeName
-              ? ` for ${nearbyAccessibilitySource.placeName}`
-              : ''}
-            {typeof nearbyAccessibilitySource.distanceKm ===
-              'number'
-              ? ` (${nearbyAccessibilitySource.distanceKm.toFixed(
-                  2,
-                )} km away)`
-              : ''}
-            .
-          </p>
-        </div>
-      </div>
-    </div>
-  )}
-          {destinationPlaceId &&
-            accessibilityLoading && (
-              <div className="mb-5 flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-                <Loader2
-                  size={18}
-                  className="animate-spin"
+          {!locationLoading && locationError && (
+            <div className="mb-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <div className="flex items-start gap-3">
+                <AlertTriangle
+                  size={19}
+                  className="mt-0.5 shrink-0"
                 />
-
-                Loading accessibility
-                information...
+                <span>{locationError}</span>
               </div>
-            )}
+            </div>
+          )}
 
-          {destinationPlaceId &&
-            !accessibilityLoading &&
-            accessibilityError && (
-              <div className="mb-5 rounded-2xl border border-amber-300 bg-amber-50 p-4">
-                <div className="flex items-start gap-3">
-                  <AlertTriangle
-                    size={21}
-                    className="mt-0.5 shrink-0 text-amber-600"
-                  />
+          {/* NEARBY ACCESSIBILITY SOURCE */}
 
-                  <div>
-                    <h2 className="font-bold text-amber-900">
-                      Accessibility information
-                      unavailable
-                    </h2>
-
-                    <p className="mt-1 text-sm leading-5 text-amber-800">
-                      {accessibilityError}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-          {destinationPlaceId &&
-            !accessibilityLoading &&
-            !accessibilityError &&
-            placeAccessibility && (
+          {!destinationPlaceId &&
+            nearbyAccessibilitySource && (
               <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                 <div className="flex items-start gap-3">
                   <ShieldCheck
@@ -1679,80 +1292,115 @@ setCurrentStepIndex(0);
                     className="mt-0.5 shrink-0 text-emerald-600"
                   />
 
-                  <div className="min-w-0">
+                  <div>
                     <h2 className="font-bold text-emerald-900">
-                      Accessibility data
-                      available
+                      Accessibility data found
                     </h2>
 
-                    {visibleAccessibilityFeatures.length >
-                      0 && (
-                      <div className="mt-2 space-y-1">
-                        {visibleAccessibilityFeatures.map(
-                          (
-                            feature,
-                          ) => (
-                            <div
-                              key={
-                                feature
-                              }
-                              className="flex items-center gap-2 text-sm text-emerald-800"
-                            >
-                              <CheckCircle2
-                                size={
-                                  15
-                                }
-                              />
-
-<span>
-  {feature}
-</span>
-                            </div>
-                          ),
-                        )}
-                      </div>
-                    )}
-
-                    {placeAccessibility.warnings &&
-                      placeAccessibility
-                        .warnings.length >
-                        0 && (
-                        <div className="mt-3 border-t border-emerald-200 pt-3">
-                          {placeAccessibility.warnings.map(
-                            (
-                              warning,
-                            ) => (
-                              <div
-                                key={
-                                  warning
-                                }
-                                className="flex items-start gap-2 text-sm text-amber-800"
-                              >
-                                <AlertTriangle
-                                  size={
-                                    15
-                                  }
-                                  className="mt-0.5 shrink-0"
-                                />
-
-                                <span>
-                                  {
-                                    warning
-                                  }
-                                </span>
-                              </div>
-                            ),
-                          )}
-                        </div>
-                      )}
+                    <p className="mt-1 text-sm leading-5 text-emerald-800">
+                      Accessibility information was found
+                      {nearbyAccessibilitySource.placeName
+                        ? ` for ${nearbyAccessibilitySource.placeName}`
+                        : ''}
+                      {typeof nearbyAccessibilitySource.distanceKm === 'number'
+                        ? ` (${nearbyAccessibilitySource.distanceKm.toFixed(2)} km away)`
+                        : ''}
+                      .
+                    </p>
                   </div>
                 </div>
               </div>
             )}
 
-          {/* -------------------------------------------------
-              ROUTES HEADER
-          ------------------------------------------------- */}
+          {/* ACCESSIBILITY LOADING */}
+
+          {accessibilityLoading && (
+            <div className="mb-5 flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              <Loader2
+                size={18}
+                className="animate-spin"
+              />
+              Loading accessibility information...
+            </div>
+          )}
+
+          {accessibilityError && (
+            <div className="mb-5 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle
+                  size={21}
+                  className="mt-0.5 shrink-0 text-amber-600"
+                />
+
+                <div>
+                  <h2 className="font-bold text-amber-900">
+                    Accessibility information unavailable
+                  </h2>
+
+                  <p className="mt-1 text-sm leading-5 text-amber-800">
+                    {accessibilityError}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PLACE ACCESSIBILITY INFORMATION */}
+
+          {placeAccessibility && (
+            <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="flex items-start gap-3">
+                <ShieldCheck
+                  size={22}
+                  className="mt-0.5 shrink-0 text-emerald-600"
+                />
+
+                <div className="min-w-0">
+                  <h2 className="font-bold text-emerald-900">
+                    Accessibility data available
+                  </h2>
+
+                  {visibleAccessibilityFeatures.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {visibleAccessibilityFeatures.map(
+                        (feature) => (
+                          <div
+                            key={feature}
+                            className="flex items-center gap-2 text-sm text-emerald-800"
+                          >
+                            <CheckCircle2 size={15} />
+                            <span>{feature}</span>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  )}
+
+                  {placeAccessibility.warnings &&
+                    placeAccessibility.warnings.length > 0 && (
+                      <div className="mt-3 border-t border-emerald-200 pt-3">
+                        {placeAccessibility.warnings.map(
+                          (warning) => (
+                            <div
+                              key={warning}
+                              className="flex items-start gap-2 text-sm text-amber-800"
+                            >
+                              <AlertTriangle
+                                size={15}
+                                className="mt-0.5 shrink-0"
+                              />
+                              <span>{warning}</span>
+                            </div>
+                          ),
+                        )}
+                      </div>
+                    )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ROUTES HEADER */}
 
           <div className="mb-4">
             <div className="flex items-center gap-2">
@@ -1773,9 +1421,7 @@ setCurrentStepIndex(0);
             </p>
           </div>
 
-          {/* -------------------------------------------------
-              ROUTE LOADING
-          ------------------------------------------------- */}
+          {/* ROUTE LOADING */}
 
           {routeLoading && (
             <div className="mb-4 flex items-center justify-center gap-3 rounded-2xl bg-white px-5 py-6 shadow-sm">
@@ -1790,223 +1436,206 @@ setCurrentStepIndex(0);
             </div>
           )}
 
-          {/* -------------------------------------------------
-              ROUTE ERROR
-          ------------------------------------------------- */}
+          {/* ROUTE ERROR */}
 
-          {!routeLoading &&
-            routeError && (
-              <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4">
-                <div className="flex items-start gap-3">
-                  <AlertTriangle
-                    size={21}
-                    className="mt-0.5 shrink-0 text-red-600"
-                  />
+          {!routeLoading && routeError && (
+            <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle
+                  size={21}
+                  className="mt-0.5 shrink-0 text-red-600"
+                />
 
-                  <div>
-                    <h3 className="font-bold text-red-900">
-                      Route unavailable
-                    </h3>
+                <div>
+                  <h3 className="font-bold text-red-900">
+                    Route unavailable
+                  </h3>
 
-                    <p className="mt-1 text-sm text-red-800">
-                      {routeError}
-                    </p>
-                  </div>
+                  <p className="mt-1 text-sm text-red-800">
+                    {routeError}
+                  </p>
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-          {/* -------------------------------------------------
-              ROUTE CARDS
-          ------------------------------------------------- */}
+          {/* ROUTE CARDS */}
 
-          {!routeLoading &&
-            routeCards.length >
-              0 && (
-              <div className="space-y-3">
-                {routeCards.map(
-                  (route) => {
-                    const selected =
-                      route.id ===
-                      selectedRoute;
-                      const backendRoute =
+          {!routeLoading && routeCards.length > 0 && (
+            <div className="space-y-3">
+              {routeCards.map((route) => {
+                const selected =
+                  route.id === selectedRoute;
+
+                const analyzedRoute =
   getBackendRoute(
-    backendRoutes,
+    analyzedRoutes,
     route.id,
-  );
+  ) ??
+  (route.id === 'accessible'
+    ? analyzedRoutes[0] ?? null
+    : null);
 
-const accessibility =
-  backendRoute?.accessibility;
+                const backendRoute =
+                  analyzedRoute ??
+                  getBackendRoute(
+                    backendRoutes,
+                    route.id,
+                  );
 
-                    return (
-                      <button
-                        key={
-                          route.id
-                        }
-                        type="button"
-                        onClick={() =>
-                          setSelectedRoute(
-                            route.id,
-                          )
-                        }
-                        className={`w-full rounded-2xl border p-4 text-left transition ${
-                          selected
-                            ? route.id === 'accessible' && hasAccessibilityData
-                              ? 'border-emerald-500 bg-emerald-50 shadow-md'
-                              : 'border-primary-500 bg-primary-50 shadow-md'
-                            : route.id === 'accessible' && hasAccessibilityData
-                              ? 'border-emerald-200 bg-emerald-50/40 shadow-sm hover:border-emerald-300'
-                              : 'border-slate-200 bg-white shadow-sm hover:border-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-2xl shadow-sm">
-                            {
-                              route.emoji
-                            }
+                const accessibility =
+                  backendRoute?.accessibility;
+
+                return (
+                  <button
+                    key={route.id}
+                    type="button"
+                    onClick={() =>
+                      setSelectedRoute(route.id)
+                    }
+                    className={`w-full rounded-2xl border p-4 text-left transition ${
+                      selected
+                        ? route.id === 'accessible' &&
+                          hasAccessibilityData
+                          ? 'border-emerald-500 bg-emerald-50 shadow-md'
+                          : 'border-primary-500 bg-primary-50 shadow-md'
+                        : route.id === 'accessible' &&
+                          hasAccessibilityData
+                          ? 'border-emerald-200 bg-emerald-50/40 shadow-sm hover:border-emerald-300'
+                          : 'border-slate-200 bg-white shadow-sm hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-2xl shadow-sm">
+                        {route.emoji}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="text-base font-extrabold text-slate-900">
+                              {route.title}
+                            </h3>
+
+                            <p className="mt-0.5 text-xs font-semibold text-primary-700">
+                              {route.tag}
+                            </p>
+
+                            {hasAccessibilityData &&
+                              route.id === 'accessible' && (
+                                <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                                  <Accessibility size={14} />
+                                  Accessibility data available
+                                </div>
+                              )}
                           </div>
 
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <h3 className="text-base font-extrabold text-slate-900">
-                                  {
-                                    route.title
-                                  }
-                                </h3>
-
-                                <p className="mt-0.5 text-xs font-semibold text-primary-700">
-  {route.tag}
-</p>
-
-{hasAccessibilityData && route.id === 'accessible' && (
-  <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
-    <Accessibility size={14} />
-    Verified accessibility data
-  </div>
-)}
-                              </div>
-
-                              {selected && (
-  <CheckCircle2
-    size={23}
-    className={`shrink-0 ${
-      route.id === 'accessible' &&
-      hasAccessibilityData
-        ? 'text-emerald-600'
-        : 'text-primary-600'
-    }`}
-  />
-)}
-                            </div>
-
-                            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-600">
-                              <span className="flex items-center gap-1.5">
-                                <MapPin
-                                  size={
-                                    16
-                                  }
-                                />
-
-                                {route.distanceKm.toFixed(
-                                  1,
-                                )}{' '}
-                                km
-                              </span>
-
-                              <span className="flex items-center gap-1.5">
-                                <Clock3
-                                  size={
-                                    16
-                                  }
-                                />
-
-                                {Math.max(
-                                  1,
-                                  Math.round(
-                                    route.durationMin,
-                                  ),
-                                )}{' '}
-                                min
-                              </span>
-                            </div>
-                            {accessibility && (
-  <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2">
-    <div className="flex items-center justify-between">
-      <span className="text-xs font-bold text-emerald-800">
-        Accessibility score
-      </span>
-
-      <span className="text-sm font-extrabold text-emerald-700">
-        {accessibility.score}/100
-      </span>
-    </div>
-
-    <p className="mt-1 text-xs text-emerald-700">
-      {accessibility.summary}
-    </p>
-  </div>
-)}
-
-                            <div className="mt-3 space-y-1.5">
-                              {route.features
-                                .slice(
-                                  0,
-                                  3,
-                                )
-                                .map(
-                                  (
-                                    feature,
-                                    index,
-                                  ) => (
-                                    <div
-                                      key={`${route.id}-${index}`}
-                                      className="flex items-start gap-2 text-xs text-slate-600"
-                                    >
-                                      {hasAccessibilityData &&
-                                      route.id ===
-                                        'accessible' ? (
-                                        <Accessibility
-                                          size={
-                                            14
-                                          }
-                                          className="mt-0.5 shrink-0 text-emerald-600"
-                                        />
-                                      ) : (
-                                        <Footprints
-                                          size={
-                                            14
-                                          }
-                                          className="mt-0.5 shrink-0 text-slate-500"
-                                        />
-                                      )}
-
-                                      <span>
-                                        {
-                                          feature
-                                        }
-                                      </span>
-                                    </div>
-                                  ),
-                                )}
-                            </div>
-                          </div>
+                          {selected && (
+                            <CheckCircle2
+                              size={23}
+                              className={`shrink-0 ${
+                                route.id === 'accessible' &&
+                                hasAccessibilityData
+                                  ? 'text-emerald-600'
+                                  : 'text-primary-600'
+                              }`}
+                            />
+                          )}
                         </div>
-                      </button>
-                    );
-                  },
-                )}
-              </div>
-            )}
 
-          {/* -------------------------------------------------
-              NO ROUTES
-          ------------------------------------------------- */}
+                        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-600">
+                          <span className="flex items-center gap-1.5">
+                            <MapPin size={16} />
+                            {route.distanceKm.toFixed(1)} km
+                          </span>
+
+                          <span className="flex items-center gap-1.5">
+                            <Clock3 size={16} />
+                            {Math.max(
+                              1,
+                              Math.round(route.durationMin),
+                            )}{' '}
+                            min
+                          </span>
+                        </div>
+
+                        {accessibility && (
+                          <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-emerald-800">
+                                Accessibility score
+                              </span>
+
+                              <span className="text-sm font-extrabold text-emerald-700">
+                                {accessibility.score}/100
+                              </span>
+                            </div>
+
+                            <p className="mt-1 text-xs text-emerald-700">
+                              {accessibility.summary}
+                            </p>
+
+                            {accessibility.preferences &&
+                              accessibility.preferences.length > 0 && (
+                                <div className="mt-2 space-y-1 border-t border-emerald-200 pt-2">
+                                  {accessibility.preferences.map(
+                                    (item, index) => (
+                                      <div
+                                        key={`${item.preference}-${index}`}
+                                        className="flex items-start justify-between gap-2 text-xs text-emerald-800"
+                                      >
+                                        <span>
+                                          {item.preference}
+                                        </span>
+                                        <span className="font-semibold">
+                                          {item.status}
+                                        </span>
+                                      </div>
+                                    ),
+                                  )}
+                                </div>
+                              )}
+                          </div>
+                        )}
+
+                        <div className="mt-3 space-y-1.5">
+                          {route.features
+                            .slice(0, 3)
+                            .map((feature, index) => (
+                              <div
+                                key={`${route.id}-${index}`}
+                                className="flex items-start gap-2 text-xs text-slate-600"
+                              >
+                                {hasAccessibilityData &&
+                                route.id === 'accessible' ? (
+                                  <Accessibility
+                                    size={14}
+                                    className="mt-0.5 shrink-0 text-emerald-600"
+                                  />
+                                ) : (
+                                  <Footprints
+                                    size={14}
+                                    className="mt-0.5 shrink-0 text-slate-500"
+                                  />
+                                )}
+
+                                <span>{feature}</span>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* NO ROUTES */}
 
           {!routeLoading &&
             !routeError &&
-            routeCards.length ===
-              0 && (
+            routeCards.length === 0 && (
               <div className="rounded-2xl border border-slate-200 bg-white p-5 text-center shadow-sm">
                 <RouteIcon
                   size={30}
@@ -2018,90 +1647,65 @@ const accessibility =
                 </h3>
 
                 <p className="mt-1 text-sm text-slate-500">
-                  We are still trying to
-                  calculate a road route.
+                  We are still trying to calculate a road route.
                 </p>
               </div>
             )}
 
-          {/* -------------------------------------------------
-              IMPORTANT ROUTING NOTICE
-          ------------------------------------------------- */}
+          {/* ROUTE INSTRUCTIONS */}
 
-<div className="mt-4 rounded-2xl bg-white p-4 shadow-sm">
-  <h3 className="mb-3 text-sm font-extrabold text-slate-900">
-    Route instructions
-  </h3>
+          <div className="mt-4 rounded-2xl bg-white p-4 shadow-sm">
+            <h3 className="mb-3 text-sm font-extrabold text-slate-900">
+              Route instructions
+            </h3>
 
-  <div className="space-y-3">
-    {routeSteps.map((step, index) => {
-      const type =
-        step.maneuver?.type;
+            <div className="space-y-3">
+              {routeSteps.map((step, index) => {
+                const type = step.maneuver?.type;
+                const modifier = step.maneuver?.modifier;
 
-      const modifier =
-        step.maneuver?.modifier;
+                let instruction = 'Continue straight';
 
-      let instruction =
-        'Continue straight';
+                if (type === 'arrive') {
+                  instruction = 'Arrive at destination';
+                } else if (modifier === 'left') {
+                  instruction = 'Turn left';
+                } else if (modifier === 'right') {
+                  instruction = 'Turn right';
+                } else if (modifier === 'slight left') {
+                  instruction = 'Slight left';
+                } else if (modifier === 'slight right') {
+                  instruction = 'Slight right';
+                } else if (modifier === 'uturn') {
+                  instruction = 'Make a U-turn';
+                }
 
-      if (
-        type === 'arrive'
-      ) {
-        instruction =
-          'Arrive at destination';
-      } else if (
-        modifier === 'left'
-      ) {
-        instruction =
-          'Turn left';
-      } else if (
-        modifier === 'right'
-      ) {
-        instruction =
-          'Turn right';
-      } else if (
-        modifier === 'slight left'
-      ) {
-        instruction =
-          'Slight left';
-      } else if (
-        modifier === 'slight right'
-      ) {
-        instruction =
-          'Slight right';
-      } else if (
-        modifier === 'uturn'
-      ) {
-        instruction =
-          'Make a U-turn';
-      }
+                return (
+                  <div
+                    key={index}
+                    className="flex items-center gap-3 rounded-xl bg-slate-50 p-3"
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-100 font-bold text-primary-700">
+                      {index + 1}
+                    </div>
 
-      return (
-        <div
-          key={index}
-          className="flex items-center gap-3 rounded-xl bg-slate-50 p-3"
-        >
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-100 font-bold text-primary-700">
-            {index + 1}
-          </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-900">
+                        {instruction}
+                      </div>
 
-          <div className="min-w-0">
-            <div className="font-bold text-slate-900">
-              {instruction}
-            </div>
-
-            <div className="text-xs text-slate-500">
-              {Math.round(step.distance)} m
-              {step.name
-                ? ` • ${step.name}`
-                : ''}
+                      <div className="text-xs text-slate-500">
+                        {Math.round(step.distance)} m
+                        {step.name ? ` • ${step.name}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
-        </div>
-      );
-    })}
-  </div>
-</div>
+
+          {/* ABOUT THIS ROUTE */}
 
           <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-start gap-3">
@@ -2117,8 +1721,8 @@ const accessibility =
 
                 <p className="mt-1 text-xs leading-5 text-slate-500">
                   {hasAccessibilityData
-                    ? 'Road routing is used for the route geometry. AccessMob accessibility information is shown separately and should be treated as location data, not as a guarantee that every route segment is accessible.'
-                    : 'This destination can still be navigated using the road route. Because it came from map search and has no AccessMob accessibility record, accessibility conditions have not been verified.'}
+                    ? 'Road routing is used for the route geometry. Accessibility information is shown separately and should be treated as location data, not as a guarantee that every route segment is accessible.'
+                    : 'This destination can still be navigated using the road route. Accessibility conditions have not been verified for this destination.'}
                 </p>
               </div>
             </div>
@@ -2128,9 +1732,7 @@ const accessibility =
         </div>
       </div>
 
-      {/* =====================================================
-          STICKY START ROUTE BUTTON
-      ===================================================== */}
+      {/* START ROUTE BUTTON */}
 
       <div className="shrink-0 border-t border-slate-200 bg-white p-4 shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">
         <button
@@ -2140,9 +1742,7 @@ const accessibility =
             routeLoading ||
             !!routeError
           }
-          onClick={() =>
-            go('navigation')
-          }
+          onClick={() => go('navigation')}
           className={`flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-4 text-base font-extrabold shadow-lg transition ${
             selectedRouteCard &&
             !routeLoading &&
@@ -2151,10 +1751,7 @@ const accessibility =
               : 'cursor-not-allowed bg-slate-200 text-slate-400'
           }`}
         >
-          <Navigation
-            size={20}
-          />
-
+          <Navigation size={20} />
           Start Route
         </button>
       </div>

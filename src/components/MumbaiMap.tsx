@@ -1,6 +1,8 @@
+
 import {
   MapContainer,
   TileLayer,
+  Pane,
   CircleMarker,
   Marker,
   Popup,
@@ -14,7 +16,11 @@ import { useEffect, useMemo, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
 
 import type { AccessibilityMode } from '@/types';
-import { getNearbyReports, type NearbyReport } from '@/api';
+import {
+  API_URL,
+  getNearbyReports,
+  type NearbyReport,
+} from '@/api';
 
 interface DestinationPoint {
   name: string;
@@ -25,32 +31,43 @@ interface DestinationPoint {
 interface Props {
   mode?: AccessibilityMode;
   route?: 'accessible' | 'fastest' | 'clear' | null;
-
-  // Existing MongoDB destination support
   destinationId?: string | null;
-
-  // New destination support for searched locations
   destinationPoint?: DestinationPoint | null;
-
   progress?: number;
   dim?: boolean;
   highContrast?: boolean;
 }
 
+interface OSMPoint {
+  id: string;
+  osmId: number;
+  osmType: string;
+  type: 'ramp' | 'stairs' | 'wheelchair_accessible';
+  name: string;
+  latitude: number;
+  longitude: number;
+  description: string;
+  source: string;
+  tags?: Record<string, string>;
+}
+
+interface OSMResponse {
+  success: boolean;
+  source: string;
+  count: number;
+  points: OSMPoint[];
+}
+
 interface BackendPlace {
   id?: string;
   _id?: string;
-
   name?: string;
   area?: string;
-
   latitude?: number;
   longitude?: number;
-
   lat?: number;
   lng?: number;
   lon?: number;
-
   coordinates?: {
     latitude?: number;
     longitude?: number;
@@ -58,16 +75,12 @@ interface BackendPlace {
     lng?: number;
     lon?: number;
   };
-
   accessibility?: string[];
   accessibility_features?: string[];
-
   tags?: string[];
   warnings?: string[];
-
   wheelchair?: boolean;
   wheelchair_accessible?: boolean;
-
   ramp?: boolean;
   elevator?: boolean;
   accessible_entrance?: boolean;
@@ -80,10 +93,8 @@ interface MapPlace {
   name: string;
   area: string;
   position: [number, number];
-
   tags: string[];
   warnings: string[];
-
   wheelchair: boolean;
   ramp: boolean;
   elevator: boolean;
@@ -92,97 +103,8 @@ interface MapPlace {
   obstruction: boolean;
 }
 
-const MUMBAI_CENTER: [number, number] = [
-  19.076,
-  72.8777,
-];
+const MUMBAI_CENTER: [number, number] = [19.076, 72.8777];
 
-/*
- * These are only fallback/demo points.
- *
- * Once the backend returns latitude/longitude for every
- * place/accessibility point, those backend coordinates
- * will automatically be used instead.
- */
-const DEMO_PLACES: MapPlace[] = [
-  {
-    id: 'ramp-1',
-    name: 'Accessible Ramp',
-    area: 'Mumbai',
-    position: [19.075, 72.879],
-    tags: ['ramp', 'step-free'],
-    warnings: [],
-    wheelchair: true,
-    ramp: true,
-    elevator: false,
-    accessibleEntrance: false,
-    clearCrossing: false,
-    obstruction: false,
-  },
-  {
-    id: 'elevator-1',
-    name: 'Accessible Elevator',
-    area: 'Mumbai',
-    position: [19.078, 72.875],
-    tags: ['elevator', 'accessible'],
-    warnings: [],
-    wheelchair: true,
-    ramp: false,
-    elevator: true,
-    accessibleEntrance: false,
-    clearCrossing: false,
-    obstruction: false,
-  },
-  {
-    id: 'entrance-1',
-    name: 'Step-free Entrance',
-    area: 'Mumbai',
-    position: [19.0735, 72.8765],
-    tags: ['entrance', 'step-free'],
-    warnings: [],
-    wheelchair: true,
-    ramp: false,
-    elevator: false,
-    accessibleEntrance: true,
-    clearCrossing: false,
-    obstruction: false,
-  },
-  {
-    id: 'crossing-1',
-    name: 'Clear Pedestrian Crossing',
-    area: 'Mumbai',
-    position: [19.0745, 72.8785],
-    tags: ['crossing', 'clear'],
-    warnings: [],
-    wheelchair: false,
-    ramp: false,
-    elevator: false,
-    accessibleEntrance: false,
-    clearCrossing: true,
-    obstruction: false,
-  },
-  {
-    id: 'warning-1',
-    name: 'Possible Obstruction',
-    area: 'Mumbai',
-    position: [19.077, 72.881],
-    tags: ['warning'],
-    warnings: ['Possible obstruction ahead'],
-    wheelchair: false,
-    ramp: false,
-    elevator: false,
-    accessibleEntrance: false,
-    clearCrossing: false,
-    obstruction: true,
-  },
-];
-
-/*
- * Demo route geometry.
- *
- * These are frontend demonstration paths.
- * They are NOT real-world turn-by-turn navigation.
- */
 const ACCESSIBLE_ROUTE: [number, number][] = [
   [19.0715, 72.8735],
   [19.073, 72.875],
@@ -209,42 +131,26 @@ const CLEAR_ROUTE: [number, number][] = [
   [19.079, 72.881],
 ];
 
-/* ---------------------------------------------------------
-   Destination marker
---------------------------------------------------------- */
-
 const destinationIcon = L.divIcon({
   className: 'accessnav-destination-marker',
-
   html: `
-    <div
-      style="
-        width:42px;
-        height:42px;
-        border-radius:50%;
-        background:#4f46e5;
-        border:4px solid white;
-        box-shadow:0 4px 16px rgba(0,0,0,.4);
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        color:white;
-        font-size:20px;
-        font-weight:700;
-      "
-      aria-label="Destination"
-    >
-      📍
-    </div>
+    <div style="
+      width:42px;
+      height:42px;
+      border-radius:50%;
+      background:#4f46e5;
+      border:4px solid white;
+      box-shadow:0 4px 16px rgba(0,0,0,.4);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      color:white;
+      font-size:20px;
+    ">📍</div>
   `,
-
   iconSize: [42, 42],
   iconAnchor: [21, 21],
 });
-
-/* ---------------------------------------------------------
-   Helpers
---------------------------------------------------------- */
 
 function toNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -253,10 +159,7 @@ function toNumber(value: unknown): number | null {
 
   if (typeof value === 'string') {
     const parsed = Number(value);
-
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   return null;
@@ -280,9 +183,7 @@ function normalizePlace(
     toNumber(place.coordinates?.lng) ??
     toNumber(place.coordinates?.lon);
 
-  if (latitude === null || longitude === null) {
-    return null;
-  }
+  if (latitude === null || longitude === null) return null;
 
   const tags = [
     ...(place.tags ?? []),
@@ -290,138 +191,64 @@ function normalizePlace(
     ...(place.accessibility_features ?? []),
   ].map((item) => String(item).toLowerCase());
 
-  const warnings = (place.warnings ?? []).map((item) =>
-    String(item),
-  );
+  const warnings = (place.warnings ?? []).map(String);
 
   const hasTag = (...names: string[]) =>
     names.some((name) =>
-      tags.some((tag) =>
-        tag.includes(name.toLowerCase()),
-      ),
+      tags.some((tag) => tag.includes(name.toLowerCase())),
     );
 
   return {
-    id: String(
-      place.id ??
-        place._id ??
-        `backend-${index}`,
-    ),
-
-    name:
-      place.name ??
-      `Accessible Place ${index + 1}`,
-
-    area:
-      place.area ??
-      'Mumbai',
-
-    position: [
-      latitude,
-      longitude,
-    ],
-
+    id: String(place.id ?? place._id ?? `backend-${index}`),
+    name: place.name ?? `Accessible Place ${index + 1}`,
+    area: place.area ?? 'Mumbai',
+    position: [latitude, longitude],
     tags,
-
     warnings,
-
     wheelchair:
-      Boolean(
-        place.wheelchair ??
-          place.wheelchair_accessible,
-      ) ||
-      hasTag(
-        'wheelchair',
-        'accessible',
-      ),
-
-    ramp:
-      Boolean(place.ramp) ||
-      hasTag(
-        'ramp',
-        'step-free',
-      ),
-
-    elevator:
-      Boolean(place.elevator) ||
-      hasTag(
-        'elevator',
-        'lift',
-      ),
-
+      Boolean(place.wheelchair ?? place.wheelchair_accessible) ||
+      hasTag('wheelchair', 'accessible'),
+    ramp: Boolean(place.ramp) || hasTag('ramp', 'step-free'),
+    elevator: Boolean(place.elevator) || hasTag('elevator', 'lift'),
     accessibleEntrance:
-      Boolean(
-        place.accessible_entrance,
-      ) ||
-      hasTag(
-        'entrance',
-        'step-free',
-      ),
-
+      Boolean(place.accessible_entrance) ||
+      hasTag('entrance', 'step-free'),
     clearCrossing:
       Boolean(place.clear_crossing) ||
-      hasTag(
-        'crossing',
-        'clear crossing',
-      ),
-
+      hasTag('crossing', 'clear crossing'),
     obstruction:
       Boolean(place.obstruction) ||
       warnings.length > 0 ||
-      hasTag(
-        'warning',
-        'obstruction',
-        'blocked',
-      ),
+      hasTag('warning', 'obstruction', 'blocked'),
   };
 }
 
-/* ---------------------------------------------------------
-   Backend loader
---------------------------------------------------------- */
-
 async function loadPlaces(): Promise<MapPlace[]> {
   try {
-    const response = await fetch('/api/places');
+    const response = await fetch(`${API_URL}/api/places`);
 
     if (!response.ok) {
-      throw new Error(
-        `Places request failed: ${response.status}`,
-      );
+      throw new Error(`Places request failed: ${response.status}`);
     }
 
     const data = await response.json();
 
-    const rawPlaces: BackendPlace[] =
-      Array.isArray(data)
-        ? data
-        : Array.isArray(data?.places)
-          ? data.places
-          : Array.isArray(data?.items)
-            ? data.items
-            : [];
+    const rawPlaces: BackendPlace[] = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.places)
+        ? data.places
+        : Array.isArray(data?.items)
+          ? data.items
+          : [];
 
-    const normalized = rawPlaces
+    return rawPlaces
       .map(normalizePlace)
-      .filter(
-        (place): place is MapPlace =>
-          place !== null,
-      );
-
-    return normalized;
+      .filter((place): place is MapPlace => place !== null);
   } catch (error) {
-    console.error(
-      'AccessNav map: unable to load backend places',
-      error,
-    );
-
+    console.error('Unable to load backend places:', error);
     return [];
   }
 }
-
-/* ---------------------------------------------------------
-   Map controller
---------------------------------------------------------- */
 
 function MapController({
   destination,
@@ -433,46 +260,31 @@ function MapController({
   const map = useMap();
 
   useEffect(() => {
-    if (!destination) {
-      return;
+    if (destination) {
+      map.flyTo(destination, 16, { duration: 1 });
     }
-
-    map.flyTo(destination, 16, {
-      duration: 1,
-    });
   }, [destination, map]);
 
   useEffect(() => {
-    if (!highContrast) {
-      return;
+    if (highContrast) {
+      map.setZoom(Math.max(map.getZoom(), 14));
     }
-
-    map.setZoom(
-      Math.max(map.getZoom(), 14),
-    );
   }, [highContrast, map]);
 
   return null;
 }
 
-/* ---------------------------------------------------------
-   Marker styling
---------------------------------------------------------- */
+function getRouteCoordinates(
+  route: Props['route'],
+): [number, number][] {
+  if (route === 'accessible') return ACCESSIBLE_ROUTE;
+  if (route === 'fastest') return FASTEST_ROUTE;
+  if (route === 'clear') return CLEAR_ROUTE;
+  return [];
+}
 
-function getMarkerStyle(
-  type:
-    | 'ramp'
-    | 'elevator'
-    | 'entrance'
-    | 'crossing'
-    | 'warning'
-    | 'place',
-  mode: AccessibilityMode,
-) {
-  const radius =
-    mode === 'lowvision'
-      ? 15
-      : 10;
+function getOSMStyle(type: OSMPoint['type'], mode: AccessibilityMode) {
+  const radius = mode === 'lowvision' ? 15 : 11;
 
   switch (type) {
     case 'ramp':
@@ -482,68 +294,21 @@ function getMarkerStyle(
         radius,
       };
 
-    case 'elevator':
+    case 'stairs':
       return {
-        color: '#3730a3',
-        fillColor: '#6366f1',
+        color: '#991b1b',
+        fillColor: '#ef4444',
         radius,
       };
 
-    case 'entrance':
+    case 'wheelchair_accessible':
       return {
-        color: '#166534',
-        fillColor: '#22c55e',
-        radius,
-      };
-
-    case 'crossing':
-      return {
-        color: '#075985',
-        fillColor: '#38bdf8',
-        radius,
-      };
-
-    case 'warning':
-      return {
-        color: '#92400e',
-        fillColor: '#f59e0b',
-        radius,
-      };
-
-    default:
-      return {
-        color: '#1e293b',
-        fillColor: '#94a3b8',
+        color: '#1e40af',
+        fillColor: '#3b82f6',
         radius,
       };
   }
 }
-
-/* ---------------------------------------------------------
-   Route
---------------------------------------------------------- */
-
-function getRouteCoordinates(
-  route: Props['route'],
-): [number, number][] {
-  if (route === 'accessible') {
-    return ACCESSIBLE_ROUTE;
-  }
-
-  if (route === 'fastest') {
-    return FASTEST_ROUTE;
-  }
-
-  if (route === 'clear') {
-    return CLEAR_ROUTE;
-  }
-
-  return [];
-}
-
-/* ---------------------------------------------------------
-   Main map
---------------------------------------------------------- */
 
 export default function MumbaiMap({
   mode = 'wheelchair',
@@ -554,24 +319,22 @@ export default function MumbaiMap({
   dim = false,
   highContrast = false,
 }: Props) {
-  const [backendPlaces, setBackendPlaces] =
-    useState<MapPlace[]>([]);
+  const [backendPlaces, setBackendPlaces] = useState<MapPlace[]>([]);
+  const [loadingPlaces, setLoadingPlaces] = useState(true);
 
-  const [loadingPlaces, setLoadingPlaces] =
-    useState(true);
+  const [communityReports, setCommunityReports] =
+    useState<NearbyReport[]>([]);
+  const [loadingReports, setLoadingReports] = useState(false);
 
-    const [communityReports, setCommunityReports] =
-  useState<NearbyReport[]>([]);
-
-const [loadingReports, setLoadingReports] =
-  useState(false);
+  const [osmPoints, setOsmPoints] = useState<OSMPoint[]>([]);
+  const [loadingOSM, setLoadingOSM] = useState(false);
+  const [osmError, setOsmError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
 
     async function fetchPlaces() {
       setLoadingPlaces(true);
-
       const places = await loadPlaces();
 
       if (!cancelled) {
@@ -587,38 +350,9 @@ const [loadingReports, setLoadingReports] =
     };
   }, []);
 
-  /*
-   * Use backend data whenever coordinates exist.
-   * Demo points remain as a fallback.
-   */
-  const places = useMemo(() => {
-    if (backendPlaces.length > 0) {
-      return backendPlaces;
-    }
+  const places = useMemo(() => backendPlaces, [backendPlaces]);
 
-    return DEMO_PLACES;
-  }, [backendPlaces]);
-
-  const routeCoordinates =
-    getRouteCoordinates(route);
-
-  /*
-   * Destination.
-   *
-   * Priority:
-   *
-   * 1. destinationPoint
-   *    -> searched location
-   *
-   * 2. destinationId
-   *    -> existing MongoDB destination
-   *
-   * 3. null
-   */
   const destination = useMemo(() => {
-    /*
-     * New search destination.
-     */
     if (destinationPoint) {
       return [
         destinationPoint.lat,
@@ -626,58 +360,113 @@ const [loadingReports, setLoadingReports] =
       ] as [number, number];
     }
 
-    /*
-     * Existing MongoDB destination support.
-     */
-    if (!destinationId) {
-      return null;
-    }
+    if (!destinationId) return null;
 
     const selected = places.find(
-      (place) =>
-        place.id === destinationId,
+      (place) => place.id === destinationId,
     );
 
-    if (selected) {
-      return selected.position;
-    }
+    return selected?.position ?? null;
+  }, [destinationPoint, destinationId, places]);
 
-    /*
-     * IMPORTANT:
-     * No hardcoded destination anymore.
-     */
-    return null;
-  }, [
-    destinationPoint,
-    destinationId,
-    places,
-  ]);
-
+  // Fetch ramps, stairs and accessible locations from OpenStreetMap.
   useEffect(() => {
     let cancelled = false;
-  
+    const controller = new AbortController();
+
+    async function fetchOSMPoints() {
+      const latitude = destination?.[0] ?? MUMBAI_CENTER[0];
+      const longitude = destination?.[1] ?? MUMBAI_CENTER[1];
+
+      setLoadingOSM(true);
+      setOsmError('');
+
+      const timeoutId = window.setTimeout(() => {
+        controller.abort();
+      }, 65000);
+
+      try {
+        const url =
+          `${API_URL}/api/osm/accessibility?latitude=${latitude}` +
+          `&longitude=${longitude}&radius=1500`;
+
+        const response = await fetch(url, {
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`OSM request failed: ${response.status}`);
+        }
+
+        const data: OSMResponse = await response.json();
+
+        if (!data.success || !Array.isArray(data.points)) {
+          throw new Error('Invalid OpenStreetMap response');
+        }
+
+        if (!cancelled) {
+          setOsmPoints(data.points);
+          setOsmError('');
+          console.log(
+            'OpenStreetMap loaded:',
+            data.points.length,
+            'points',
+          );
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Unable to load OpenStreetMap data:', error);
+
+          setOsmError(
+            osmPoints.length > 0
+              ? 'Showing previously loaded accessibility data'
+              : 'OpenStreetMap unavailable. Please try again later.',
+          );
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
+
+        if (!cancelled) {
+          setLoadingOSM(false);
+        }
+      }
+    }
+
+    fetchOSMPoints();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [destination]);
+
+  // Fetch community reports only after a destination is selected.
+  useEffect(() => {
+    let cancelled = false;
+
     async function fetchReports() {
       if (!destination) {
         setCommunityReports([]);
         return;
       }
-  
+
       try {
         setLoadingReports(true);
-  
+
+        console.log('Selected destination:', destination);
+
         const reports = await getNearbyReports(
           destination[0],
-          destination[1]
+          destination[1],
         );
-  
+
         if (!cancelled) {
           setCommunityReports(reports);
+          console.log('Community reports received:', reports);
         }
       } catch (error) {
-        console.error(
-          'Unable to load community reports:',
-          error
-        );
+        console.error('Unable to load community reports:', error);
+
         if (!cancelled) {
           setCommunityReports([]);
         }
@@ -687,17 +476,14 @@ const [loadingReports, setLoadingReports] =
         }
       }
     }
-  
+
     fetchReports();
-  
+
     return () => {
       cancelled = true;
     };
   }, [destination]);
 
-  /*
-   * Accessibility filtering.
-   */
   const visiblePlaces = useMemo(() => {
     return places.filter((place) => {
       if (mode === 'wheelchair') {
@@ -718,47 +504,27 @@ const [loadingReports, setLoadingReports] =
     });
   }, [places, mode]);
 
-  /*
-   * Calculate current position along route.
-   */
+  const routeCoordinates = getRouteCoordinates(route);
+
   const currentPosition = useMemo(() => {
-    if (
-      progress <= 0 ||
-      routeCoordinates.length === 0
-    ) {
+    if (progress <= 0 || routeCoordinates.length === 0) {
       return null;
     }
 
-    const percentage =
-      Math.min(
-        Math.max(progress, 0),
-        100,
-      ) / 100;
+    const percentage = Math.min(Math.max(progress, 0), 100) / 100;
 
     const index = Math.min(
       routeCoordinates.length - 1,
-      Math.floor(
-        percentage *
-          routeCoordinates.length,
-      ),
+      Math.floor(percentage * routeCoordinates.length),
     );
 
     return routeCoordinates[index];
-  }, [
-    progress,
-    routeCoordinates,
-  ]);
+  }, [progress, routeCoordinates]);
 
   return (
     <div
-      className={`absolute inset-0 ${
-        dim
-          ? 'brightness-95'
-          : ''
-      }`}
-      style={{
-        zIndex: 0,
-      }}
+      className={`absolute inset-0 ${dim ? 'brightness-95' : ''}`}
+      style={{ zIndex: 0 }}
     >
       <MapContainer
         center={MUMBAI_CENTER}
@@ -769,13 +535,9 @@ const [loadingReports, setLoadingReports] =
         touchZoom
         zoomControl={false}
         className={`h-full w-full ${
-          highContrast
-            ? 'contrast-125 saturate-150'
-            : ''
+          highContrast ? 'contrast-125 saturate-150' : ''
         }`}
-        style={{
-          zIndex: 0,
-        }}
+        style={{ zIndex: 0 }}
       >
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
@@ -787,184 +549,212 @@ const [loadingReports, setLoadingReports] =
           highContrast={highContrast}
         />
 
-        {/* -------------------------------------------------
-            Accessibility points
-        ------------------------------------------------- */}
+        {/* OpenStreetMap accessibility points */}
+        {osmPoints.map((point) => {
+          const style = getOSMStyle(point.type, mode);
 
-         
-        {/* -------------------------------------------------
-    Community-reported issues
-------------------------------------------------- */}
-
-{communityReports.map((report) => (
-  <CircleMarker
-    key={`report-${report.id}`}
-    center={[
-      report.latitude,
-      report.longitude,
-    ]}
-    radius={mode === 'lowvision' ? 17 : 12}
-    pathOptions={{
-      color: '#991b1b',
-      fillColor: '#ef4444',
-      fillOpacity: 1,
-      weight: 4,
-    }}
-  >
-    <Popup>
-      <div
-        style={{
-          minWidth: 190,
-          fontSize: mode === 'lowvision' ? 17 : 14,
-          lineHeight: 1.6,
-        }}
-      >
-        <strong>
-          ⚠️ Community Report
-        </strong>
-
-        <br />
-
-        <strong>Issue:</strong> {report.reportType}
+          return (
+            <CircleMarker
+              key={point.id}
+              center={[point.latitude, point.longitude]}
+              eventHandlers={{
+                click: () => console.log('OSM marker clicked:', point.id),
+              }}
+              radius={style.radius}
+              pathOptions={{
+                color: style.color,
+                fillColor: style.fillColor,
+                fillOpacity: 1,
+                weight: 3,
+              }}
+            >
+              <Popup>
+                <div
+                  style={{
+                    minWidth: 180,
+                    fontSize: mode === 'lowvision' ? 17 : 14,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <strong>
+                    {point.type === 'ramp'
+                      ? '🟢 Ramp'
+                      : point.type === 'stairs'
+                        ? '🔴 Stairs'
+                        : '🔵 Wheelchair accessible'}
+                  </strong>
 
         <br />
 
-        <strong>Location:</strong> {report.placeName}
+                  <strong>{point.name}</strong>
 
-        <br />
+                  <br />
 
-        <strong>Description:</strong>
+                  {point.description}
 
-        <div>
-          {report.description || 'No description provided.'}
-        </div>
+                  <br />
 
-        <div
-          style={{
-            marginTop: 8,
-            color: '#b45309',
-            fontWeight: 700,
-          }}
-        >
-          Status: {report.status}
-        </div>
+                  <span
+                    style={{
+                      color: '#64748b',
+                      fontSize: 11,
+                    }}
+                  >
+                    Source: OpenStreetMap
+                  </span>
 
-        <div
-          style={{
-            marginTop: 5,
-            fontSize: 11,
-            color: '#64748b',
-          }}
-        >
-          Community-submitted information — not verified.
-        </div>
-      </div>
-    </Popup>
-  </CircleMarker>
-))}
+                  <br />
 
-        {/* -------------------------------------------------
-            Route
-        ------------------------------------------------- */}
+                  <span style={{ fontSize: 11 }}>
+                    OSM ID: {point.osmType}/{point.osmId}
+                  </span>
+                </div>
+              </Popup>
+            </CircleMarker>
+          );
+        })}
 
-        {routeCoordinates.length >
-          0 && (
-          <Polyline
-            positions={
-              routeCoordinates
-            }
+        {/* Backend accessibility places */}
+        {visiblePlaces.map((place) => (
+          <CircleMarker
+            key={place.id}
+            center={place.position}
+            radius={mode === 'lowvision' ? 13 : 9}
             pathOptions={{
+              color: place.obstruction ? '#92400e' : '#1e293b',
+              fillColor: place.obstruction ? '#f59e0b' : '#94a3b8',
+              fillOpacity: 0.9,
+              weight: 3,
+            }}
+          >
+            <Popup>
+              <strong>{place.name}</strong>
+              <br />
+              {place.area}
+              <br />
+              {place.tags.join(', ')}
+              {place.warnings.length > 0 && (
+                <p>{place.warnings.join(', ')}</p>
+              )}
+            </Popup>
+          </CircleMarker>
+        ))}
+
+        {/* Community reports — placed above the destination marker layer */}
+        <Pane
+          name="communityReportsPane"
+          style={{ zIndex: 650, pointerEvents: 'auto' }}
+        >
+          {communityReports.map((report) => (
+            <CircleMarker
+              key={`report-${report.id}`}
+              pane="communityReportsPane"
+              center={[report.latitude, report.longitude]}
+              radius={mode === 'lowvision' ? 17 : 12}
+              eventHandlers={{
+                click: () => {
+                  console.log('Community marker clicked:', report.id);
+                },
+              }}
+              pathOptions={{
+                color: '#991b1b',
+                fillColor: '#ef4444',
+                fillOpacity: 1,
+                weight: 4,
+              }}
+            >
+              <Popup>
+                <div
+                  style={{
+                    minWidth: 190,
+                    fontSize: mode === 'lowvision' ? 17 : 14,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <strong>⚠️ Community Report</strong>
+                  <br />
+                  <strong>Issue:</strong> {report.reportType}
+                  <br />
+                  <strong>Location:</strong> {report.placeName}
+                  <br />
+                  <strong>Description:</strong>
+                  <div>
+                    {report.description || 'No description provided.'}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 8,
+                      color: '#b45309',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Status: {report.status}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 5,
+                      fontSize: 11,
+                      color: '#64748b',
+                    }}
+                  >
+                    Community-submitted information — not verified.
+                  </div>
+                </div>
+              </Popup>
+            </CircleMarker>
+          ))}
+        </Pane>
+
+        {/* Existing route display */}
+        {routeCoordinates.length > 0 && (
+          <Polyline
+            positions={routeCoordinates}
+            pathOptions={{
+              interactive: false,
               color:
-                route ===
-                'accessible'
+                route === 'accessible'
                   ? '#059669'
-                  : route ===
-                      'fastest'
+                  : route === 'fastest'
                     ? '#4f46e5'
                     : '#d97706',
-
-              weight:
-                mode ===
-                'lowvision'
-                  ? 10
-                  : 7,
-
+              weight: mode === 'lowvision' ? 10 : 7,
               opacity: 0.95,
-
               lineCap: 'round',
-
               lineJoin: 'round',
-
-              dashArray:
-                route ===
-                'clear'
-                  ? '12 8'
-                  : undefined,
+              dashArray: route === 'clear' ? '12 8' : undefined,
             }}
           />
         )}
 
-        {/* -------------------------------------------------
-            Destination
-        ------------------------------------------------- */}
-
+        {/* Destination */}
         {destination && (
-          <Marker
-            position={destination}
-            icon={destinationIcon}
-          >
+          <Marker position={destination} icon={destinationIcon}>
             <Popup>
               <div
                 style={{
-                  minWidth:
-                    mode ===
-                    'lowvision'
-                      ? 220
-                      : 170,
-
-                  fontSize:
-                    mode ===
-                    'lowvision'
-                      ? 18
-                      : 14,
-
+                  minWidth: mode === 'lowvision' ? 220 : 170,
+                  fontSize: mode === 'lowvision' ? 18 : 14,
                   lineHeight: 1.5,
                 }}
               >
                 <strong>
-                  📍{' '}
-                  {destinationPoint?.name ??
-                    'Destination'}
+                  📍 {destinationPoint?.name ?? 'Destination'}
                 </strong>
-
                 <br />
-
-                <span>
-                  {mode ===
-                  'wheelchair'
-                    ? 'Wheelchair navigation mode'
-                    : 'Low-vision navigation mode'}
-                </span>
+                {mode === 'wheelchair'
+                  ? 'Wheelchair navigation mode'
+                  : 'Low-vision navigation mode'}
               </div>
             </Popup>
           </Marker>
         )}
 
-        {/* -------------------------------------------------
-            Current location / progress
-        ------------------------------------------------- */}
-
+        {/* Current route progress marker */}
         {currentPosition && (
           <CircleMarker
-            center={
-              currentPosition
-            }
-            radius={
-              mode ===
-              'lowvision'
-                ? 13
-                : 9
-            }
+            center={currentPosition}
+            bubblingMouseEvents={false}
+            radius={mode === 'lowvision' ? 13 : 9}
             pathOptions={{
               color: '#ffffff',
               fillColor: '#dc2626',
@@ -973,85 +763,47 @@ const [loadingReports, setLoadingReports] =
             }}
           >
             <Popup>
-              <div
-                style={{
-                  fontSize:
-                    mode ===
-                    'lowvision'
-                      ? 18
-                      : 14,
-                }}
-              >
-                <strong>
-                  📍 Your current
-                  position
-                </strong>
-
-                <br />
-
-                <span>
-                  {Math.round(
-                    progress,
-                  )}
-                  % of route
-                </span>
-              </div>
+              <strong>Your current position</strong>
+              <br />
+              {Math.round(progress)}% of route
             </Popup>
           </CircleMarker>
         )}
       </MapContainer>
 
-      
-{/* ---------------------------------------------------
-    Mode indicator
---------------------------------------------------- */}
-
-
-
-
-      {/* ---------------------------------------------------
-          Backend loading indicator
-      --------------------------------------------------- */}
-
-      {loadingPlaces && (
+      {/* Loading indicators */}
+      {(loadingPlaces || loadingOSM || loadingReports) && (
         <div
           className="pointer-events-none absolute bottom-24 left-1/2 -translate-x-1/2 rounded-full bg-white/95 px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg"
-          style={{
-            zIndex: 30,
-          }}
+          style={{ zIndex: 30 }}
         >
-          Loading accessibility data…
+          {loadingOSM
+            ? 'Checking OpenStreetMap accessibility data…'
+            : loadingReports
+              ? 'Loading community reports…'
+              : 'Loading accessibility data…'}
         </div>
       )}
 
-      {/* ---------------------------------------------------
-          Data source indicator
-      --------------------------------------------------- */}
+      {/* OpenStreetMap status */}
+      <div
+        className="pointer-events-none absolute bottom-14 left-3 rounded-full bg-white/95 px-3 py-1.5 text-[10px] font-semibold text-slate-700 shadow"
+        style={{ zIndex: 30 }}
+      >
+        {loadingOSM
+          ? 'Checking OpenStreetMap…'
+          : osmError
+            ? osmError
+            : `OpenStreetMap • ${osmPoints.length} mapped points`}
+      </div>
 
-      {!loadingPlaces && (
-        <div
-          className="pointer-events-none absolute bottom-4 left-3 rounded-full bg-white/90 px-3 py-1.5 text-[10px] font-semibold text-slate-600 shadow"
-          style={{
-            zIndex: 30,
-          }}
-        >
-          {backendPlaces.length > 0
-            ? `● Live accessibility data • ${backendPlaces.length} places`
-            : '● Demo accessibility data'}
-        </div>
-      )}
-
-      {/* ---------------------------------------------------
-          High contrast border
-      --------------------------------------------------- */}
-
+      {/* High contrast border */}
       {highContrast && (
         <div
           className="pointer-events-none absolute inset-0"
           style={{
             zIndex: 20,
-            border:
-              '5px solid #facc15',
+            border: '5px solid #facc15',
           }}
         />
       )}

@@ -5,6 +5,8 @@ import {
   useEffect,
   useState,
   type ReactNode,
+  type Dispatch,
+  type SetStateAction,
 } from 'react';
 
 import type {
@@ -21,6 +23,7 @@ import {
 } from './api';
 
 export interface Destination {
+  id?: string;
   name: string;
   lat: number;
   lng: number;
@@ -31,13 +34,6 @@ export interface StartLocation {
   name: string;
   lat: number;
   lng: number;
-}
-export interface Destination {
-  id?: string;
-  name: string;
-  lat: number;
-  lng: number;
-  place?: Place;
 }
 
 export interface User {
@@ -60,8 +56,14 @@ interface AppState {
   mode: AccessibilityMode;
   setMode: (m: AccessibilityMode) => void;
 
+  preferences: string[];
+  setPreferences: Dispatch<SetStateAction<string[]>>;
+
   largeText: boolean;
   setLargeText: (enabled: boolean) => void;
+
+  highContrast: boolean;
+  setHighContrast: (enabled: boolean) => void;
 
   voiceGuidance: boolean;
   setVoiceGuidance: (enabled: boolean) => void;
@@ -105,6 +107,34 @@ export function AppProvider({
   const [mode, setMode] =
     useState<AccessibilityMode>('wheelchair');
 
+  // Load saved navigation preferences.
+  const [preferences, setPreferences] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('accessnav-preferences');
+
+      return saved
+        ? JSON.parse(saved)
+        : ['Most accessible route'];
+    } catch {
+      return ['Most accessible route'];
+    }
+  });
+
+  // Save navigation preferences.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        'accessnav-preferences',
+        JSON.stringify(preferences)
+      );
+    } catch (error) {
+      console.error(
+        'Could not save preferences:',
+        error
+      );
+    }
+  }, [preferences]);
+
   // Load saved Large Text preference.
   const [largeText, setLargeText] = useState<boolean>(() => {
     try {
@@ -113,6 +143,35 @@ export function AppProvider({
       return false;
     }
   });
+
+  // Load saved High Contrast preference.
+  const [highContrast, setHighContrast] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('accessnav-high-contrast') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  // Apply High Contrast throughout the application and save preference.
+  useEffect(() => {
+    document.documentElement.classList.toggle(
+      'high-contrast',
+      highContrast
+    );
+
+    try {
+      localStorage.setItem(
+        'accessnav-high-contrast',
+        String(highContrast)
+      );
+    } catch (error) {
+      console.error(
+        'Could not save High Contrast preference:',
+        error
+      );
+    }
+  }, [highContrast]);
 
   // Load saved Voice Guidance preference.
   const [voiceGuidance, setVoiceGuidance] = useState<boolean>(() => {
@@ -139,7 +198,7 @@ export function AppProvider({
   const [paused, setPaused] = useState(false);
   const [sosActive, setSosActive] = useState(false);
 
-  // Apply Large Text throughout the application and save the preference.
+  // Apply Large Text throughout the application and save preference.
   useEffect(() => {
     document.documentElement.classList.toggle(
       'large-text',
@@ -241,16 +300,28 @@ export function AppProvider({
         logout,
         mode,
         setMode,
+
+        preferences,
+        setPreferences,
+
         largeText,
         setLargeText,
+
+        highContrast,
+        setHighContrast,
+
         voiceGuidance,
         setVoiceGuidance,
+
         travelMode,
         setTravelMode,
+
         destination,
         setDestination,
+
         startLocation,
         setStartLocation,
+
         selectedRoute,
         setSelectedRoute,
         navStep,

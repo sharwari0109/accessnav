@@ -44,3 +44,5 @@ ios/DerivedData/
 accessnav-release-key.jks
 android/app/release/
 android/app/src/main/res/drawable/splash_old.png
+# OpenStreetMap generated cache
+backend/osm_cache/

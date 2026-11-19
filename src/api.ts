@@ -1,6 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 
-const API_URL =
+export const API_URL =
   import.meta.env.VITE_API_URL ||
   (Capacitor.getPlatform() === "android"
     ? "http://10.0.2.2:8000"
@@ -25,18 +25,15 @@ export function removeToken() {
   localStorage.removeItem("access_token");
 }
 
-
 // ============================================================
 // COMMON REQUEST HELPER
 // ============================================================
-
 
 async function apiFetch<T = any>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
   const token = getToken();
-
   const headers = new Headers(options.headers);
 
   if (options.body && !headers.has("Content-Type")) {
@@ -120,7 +117,6 @@ async function apiFetch<T = any>(
   return (await response.json()) as T;
 }
 
-
 // ============================================================
 // BACKEND HEALTH
 // ============================================================
@@ -128,7 +124,6 @@ async function apiFetch<T = any>(
 export async function checkBackend() {
   return apiFetch("/health");
 }
-
 
 // ============================================================
 // AUTHENTICATION
@@ -145,28 +140,18 @@ export interface LoginRequest {
   password: string;
 }
 
-export async function registerUser(
-  data: RegisterRequest
-) {
-  return apiFetch(
-    "/api/auth/register",
-    {
-      method: "POST",
-      body: JSON.stringify(data),
-    }
-  );
+export async function registerUser(data: RegisterRequest) {
+  return apiFetch("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }
 
-export async function loginUser(
-  data: LoginRequest
-) {
-  const result = await apiFetch(
-    "/api/auth/login",
-    {
-      method: "POST",
-      body: JSON.stringify(data),
-    }
-  );
+export async function loginUser(data: LoginRequest) {
+  const result = await apiFetch("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 
   if (result.access_token) {
     saveToken(result.access_token);
@@ -187,7 +172,6 @@ export function isLoggedIn() {
   return !!getToken();
 }
 
-
 // ============================================================
 // PLACES
 // ============================================================
@@ -196,29 +180,20 @@ export async function getPlaces() {
   return apiFetch("/api/places");
 }
 
-export async function getPlace(
-  placeId: string
-) {
-  return apiFetch(
-    `/api/places/${encodeURIComponent(placeId)}`
-  );
+export async function getPlace(placeId: string) {
+  return apiFetch(`/api/places/${encodeURIComponent(placeId)}`);
 }
-
 
 // ============================================================
 // PLACE ACCESSIBILITY
 // ============================================================
 
-export type AccessibilityMode =
-  | "wheelchair"
-  | "lowvision";
-
+export type AccessibilityMode = "wheelchair" | "lowvision";
 
 export interface AccessibilityWarning {
   text: string;
   severity: string;
 }
-
 
 export interface AccessibilityModeData {
   score: number;
@@ -226,32 +201,24 @@ export interface AccessibilityModeData {
   warnings: AccessibilityWarning[];
 }
 
-
 export interface PlaceAccessibility {
   placeId: string;
   name: string;
-
   modeSupport: {
     wheelchair: AccessibilityModeData;
     lowvision: AccessibilityModeData;
   };
-
   tags: string[];
   warnings: string[];
 }
-
 
 export async function getPlaceAccessibility(
   placeId: string
 ): Promise<PlaceAccessibility> {
   return apiFetch(
-    `/api/places/${encodeURIComponent(
-      placeId
-    )}/accessibility`
+    `/api/places/${encodeURIComponent(placeId)}/accessibility`
   );
 }
-
-
 
 // ============================================================
 // SAVED PLACES
@@ -266,15 +233,13 @@ export interface SavedPlace {
   latitude: number;
   longitude: number;
   createdAt?: string;
-  place: import('@/types').Place | null;
+  place: import("@/types").Place | null;
 }
 
-// Get saved places
 export async function getSavedPlaces(): Promise<SavedPlace[]> {
   return apiFetch("/api/saved");
 }
 
-// Save a place
 export async function savePlace(data: {
   placeId?: string | null;
   name: string;
@@ -283,23 +248,17 @@ export async function savePlace(data: {
   longitude: number;
   emoji?: string;
 }) {
-  return apiFetch('/api/saved', {
-    method: 'POST',
+  return apiFetch("/api/saved", {
+    method: "POST",
     body: JSON.stringify(data),
   });
 }
 
-// Remove a saved place
 export async function deleteSavedPlace(savedId: string) {
-  return apiFetch(
-    `/api/saved/${encodeURIComponent(savedId)}`,
-    {
-      method: "DELETE",
-    }
-  );
+  return apiFetch(`/api/saved/${encodeURIComponent(savedId)}`, {
+    method: "DELETE",
+  });
 }
-
-
 
 // ============================================================
 // ROUTES
@@ -309,7 +268,6 @@ export interface RouteFeature {
   text: string;
   ok: boolean;
 }
-
 
 export interface BackendRoute {
   id: string;
@@ -321,7 +279,6 @@ export interface BackendRoute {
   tag?: string;
   badge?: string;
   features?: RouteFeature[];
-
   accessibility?: {
     score: number;
     summary: string;
@@ -336,15 +293,9 @@ export interface BackendRoute {
   };
 }
 
-
-export async function getRoutes(
-  placeId: string
-): Promise<BackendRoute[]> {
-  return apiFetch(
-    `/api/routes/${encodeURIComponent(placeId)}`
-  );
+export async function getRoutes(placeId: string): Promise<BackendRoute[]> {
+  return apiFetch(`/api/routes/${encodeURIComponent(placeId)}`);
 }
-
 
 // ============================================================
 // ACCESSIBILITY ROUTES
@@ -360,25 +311,20 @@ export interface AccessibilityRouteResponse {
   sourceDistanceKm?: number;
 }
 
-
 export async function getAccessibilityRoutes(
   placeId: string,
   mode: AccessibilityMode
 ): Promise<BackendRoute[]> {
-  const params = new URLSearchParams({
-    mode,
-  });
+  const params = new URLSearchParams({ mode });
 
-  const response =
-    await apiFetch<AccessibilityRouteResponse>(
-      `/api/accessibility/routes/${encodeURIComponent(
-        placeId
-      )}?${params.toString()}`
-    );
+  const response = await apiFetch<AccessibilityRouteResponse>(
+    `/api/accessibility/routes/${encodeURIComponent(
+      placeId
+    )}?${params.toString()}`
+  );
 
   return response.routes;
 }
-
 
 // ============================================================
 // ACCESSIBILITY ROUTE ANALYSIS
@@ -387,59 +333,72 @@ export async function getAccessibilityRoutes(
 export interface AccessibilityAnalyzeRequest {
   mode: AccessibilityMode;
   preferences?: string[];
+  routeCoordinates?: [number, number][];
 }
-
 
 export interface AccessibilityAnalysis {
   score: number;
   summary: string;
-
   positiveFeatures: string[];
   negativeFeatures: string[];
-
   placeFeatures: string[];
   warnings: string[];
-
   preferences: {
     preference: string;
     status: string;
   }[];
 }
 
-
-export interface AnalyzedRoute
-  extends BackendRoute {
+export interface AnalyzedRoute extends BackendRoute {
   accessibility?: AccessibilityAnalysis;
 }
 
-
 export interface AccessibilityAnalyzeResponse {
-  placeId: string;
+  placeId?: string;
   mode: AccessibilityMode;
   preferences: string[];
   routes: AnalyzedRoute[];
+  osmEvidence?: {
+    available: boolean;
+    nearbyRamps: number;
+    nearbyStairs: number;
+  };
 }
-
 
 export async function analyzeAccessibilityRoute(
   placeId: string,
   data: AccessibilityAnalyzeRequest
 ): Promise<AccessibilityAnalyzeResponse> {
-
   return apiFetch(
-    `/api/accessibility/analyze/${encodeURIComponent(
-      placeId
-    )}`,
+    `/api/accessibility/analyze/${encodeURIComponent(placeId)}`,
     {
       method: "POST",
       body: JSON.stringify({
         mode: data.mode,
         preferences: data.preferences || [],
+        routeCoordinates: data.routeCoordinates || [],
       }),
     }
   );
 }
 
+export async function analyzeAccessibilityRouteByLocation(
+  data: AccessibilityAnalyzeRequest & {
+    latitude: number;
+    longitude: number;
+  }
+): Promise<AccessibilityAnalyzeResponse> {
+  return apiFetch("/api/accessibility/analyze-location", {
+    method: "POST",
+    body: JSON.stringify({
+      mode: data.mode,
+      preferences: data.preferences || [],
+      routeCoordinates: data.routeCoordinates || [],
+      latitude: data.latitude,
+      longitude: data.longitude,
+    }),
+  });
+}
 
 // ============================================================
 // ACCESSIBILITY POINTS
@@ -448,17 +407,13 @@ export async function analyzeAccessibilityRoute(
 export interface AccessibilityPoint {
   id: string;
   name: string;
-
   latitude: number;
   longitude: number;
-
   tags: string[];
   warnings: string[];
-
   score: number;
   distanceKm: number;
 }
-
 
 export interface AccessibilityPointsResponse {
   latitude: number;
@@ -467,24 +422,19 @@ export interface AccessibilityPointsResponse {
   results: AccessibilityPoint[];
 }
 
-
 export async function getAccessibilityPoints(
   latitude: number,
   longitude: number,
   radiusKm = 1
 ): Promise<AccessibilityPointsResponse> {
-
   const params = new URLSearchParams({
     latitude: String(latitude),
     longitude: String(longitude),
     radius: String(radiusKm),
   });
 
-  return apiFetch(
-    `/api/accessibility/points?${params.toString()}`
-  );
+  return apiFetch(`/api/accessibility/points?${params.toString()}`);
 }
-
 
 export async function getAccessibilityRoutesByLocation(
   latitude: number,
@@ -512,14 +462,9 @@ export async function getNavigation() {
   return apiFetch("/api/navigation");
 }
 
-export async function getNavigationStep(
-  step: number
-) {
-  return apiFetch(
-    `/api/navigation/${step}`
-  );
+export async function getNavigationStep(step: number) {
+  return apiFetch(`/api/navigation/${step}`);
 }
-
 
 // ============================================================
 // NAVIGATION ACCESSIBILITY
@@ -527,33 +472,23 @@ export async function getNavigationStep(
 
 export interface AccessibilityNavigationResponse {
   placeId: string;
-
   mode: AccessibilityMode;
-
   destination: {
     name: string;
     latitude: number;
     longitude: number;
   };
-
   accessInstructions: string[];
-
   warnings: string[];
-
   tags: string[];
-
   navigationSteps: unknown[];
 }
-
 
 export async function getNavigationAccessibility(
   placeId: string,
   mode: AccessibilityMode
 ): Promise<AccessibilityNavigationResponse> {
-
-  const params = new URLSearchParams({
-    mode,
-  });
+  const params = new URLSearchParams({ mode });
 
   return apiFetch(
     `/api/navigation/accessibility/${encodeURIComponent(
@@ -562,7 +497,6 @@ export async function getNavigationAccessibility(
   );
 }
 
-
 // ============================================================
 // REPORTS
 // ============================================================
@@ -570,7 +504,6 @@ export async function getNavigationAccessibility(
 export async function getReportOptions() {
   return apiFetch("/api/report-options");
 }
-
 
 export interface ReportRequest {
   placeId?: string | null;
@@ -581,17 +514,13 @@ export interface ReportRequest {
   description?: string;
 }
 
-export async function submitReport(
-  report: ReportRequest
-) {
-  return apiFetch(
-    "/api/reports",
-    {
-      method: "POST",
-      body: JSON.stringify(report),
-    }
-  );
+export async function submitReport(report: ReportRequest) {
+  return apiFetch("/api/reports", {
+    method: "POST",
+    body: JSON.stringify(report),
+  });
 }
+
 export interface NearbyReport {
   id: string;
   placeName: string;
@@ -599,7 +528,9 @@ export interface NearbyReport {
   longitude: number;
   reportType: string;
   description: string;
+  source: string;
   status: string;
+  verificationStatus: string;
   createdAt: string;
 }
 
@@ -649,9 +580,7 @@ export async function addEmergencyContact(
   });
 }
 
-export async function deleteEmergencyContact(
-  contactId: string
-) {
+export async function deleteEmergencyContact(contactId: string) {
   return apiFetch(
     `/api/emergency-contacts/${encodeURIComponent(contactId)}`,
     {
@@ -659,7 +588,6 @@ export async function deleteEmergencyContact(
     }
   );
 }
-
 
 // ============================================================
 // SOS ACTIVATION
