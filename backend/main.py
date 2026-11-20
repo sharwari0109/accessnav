@@ -1755,7 +1755,6 @@ def get_report_options():
 # REPORTS
 # ============================================================
 
-
 @app.post("/api/reports")
 def create_report(
     report: ReportRequest,
@@ -1778,17 +1777,21 @@ def create_report(
         "verificationStatus": "pending",
         "createdAt": created_at,
     }
-    reports_collection.insert_one(new_report)
+
+    result = reports_collection.insert_one(new_report)
+
+    report_response = {
+        key: value
+        for key, value in new_report.items()
+        if key not in ("userId", "_id")
+    }
+
+    report_response["id"] = str(result.inserted_id)
 
     return {
         "message": "Report submitted successfully",
-        "report": {
-            key: value for key, value in new_report.items()
-            if key != "userId"
-        },
+        "report": report_response,
     }
-
-
 @app.get("/api/reports")
 def get_reports(current_user=Depends(get_current_user)):
     return list(

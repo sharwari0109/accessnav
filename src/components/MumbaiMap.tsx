@@ -549,70 +549,79 @@ export default function MumbaiMap({
           highContrast={highContrast}
         />
 
-        {/* OpenStreetMap accessibility points */}
-        {osmPoints.map((point) => {
-          const style = getOSMStyle(point.type, mode);
+        
+{/* OpenStreetMap accessibility points */}
+{osmPoints.map((point) => {
+  const style = getOSMStyle(point.type, mode) ?? {
+    radius: 8,
+    color: '#2563eb',
+    fillColor: '#3b82f6',
+  };
 
-          return (
-            <CircleMarker
-              key={point.id}
-              center={[point.latitude, point.longitude]}
-              eventHandlers={{
-                click: () => console.log('OSM marker clicked:', point.id),
-              }}
-              radius={style.radius}
-              pathOptions={{
-                color: style.color,
-                fillColor: style.fillColor,
-                fillOpacity: 1,
-                weight: 3,
-              }}
-            >
-              <Popup>
-                <div
-                  style={{
-                    minWidth: 180,
-                    fontSize: mode === 'lowvision' ? 17 : 14,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  <strong>
-                    {point.type === 'ramp'
-                      ? '🟢 Ramp'
-                      : point.type === 'stairs'
-                        ? '🔴 Stairs'
-                        : '🔵 Wheelchair accessible'}
-                  </strong>
+  return (
+    <CircleMarker
+      key={point.id}
+      center={[point.latitude, point.longitude]}
+      eventHandlers={{
+        click: () => console.log('OSM marker clicked:', point.id),
+      }}
+      radius={style.radius}
+      pathOptions={{
+        color: style.color,
+        fillColor: style.fillColor,
+        fillOpacity: 1,
+        weight: 3,
+      }}
+    >
+      <Popup>
+        <div
+          style={{
+            minWidth: 180,
+            fontSize: mode === 'lowvision' ? 17 : 14,
+            lineHeight: 1.6,
+          }}
+        >
+          <strong>
+            {point.type === 'ramp'
+              ? '🟢 Ramp'
+              : point.type === 'stairs'
+                ? '🔴 Stairs'
+                : point.type === 'elevator'
+                  ? '🟣 Elevator'
+                  : point.type === 'slope'
+                    ? '🟠 Slope'
+                    : '🔵 Wheelchair accessible'}
+          </strong>
 
-        <br />
+          <br />
 
-                  <strong>{point.name}</strong>
+          <strong>{point.name}</strong>
 
-                  <br />
+          <br />
 
-                  {point.description}
+          {point.description}
 
-                  <br />
+          <br />
 
-                  <span
-                    style={{
-                      color: '#64748b',
-                      fontSize: 11,
-                    }}
-                  >
-                    Source: OpenStreetMap
-                  </span>
+          <span
+            style={{
+              color: '#64748b',
+              fontSize: 11,
+            }}
+          >
+            Source: OpenStreetMap
+          </span>
 
-                  <br />
+          <br />
 
-                  <span style={{ fontSize: 11 }}>
-                    OSM ID: {point.osmType}/{point.osmId}
-                  </span>
-                </div>
-              </Popup>
-            </CircleMarker>
-          );
-        })}
+          <span style={{ fontSize: 11 }}>
+            OSM ID: {point.osmType}/{point.osmId}
+          </span>
+        </div>
+      </Popup>
+    </CircleMarker>
+  );
+})}
 
         {/* Backend accessibility places */}
         {visiblePlaces.map((place) => (

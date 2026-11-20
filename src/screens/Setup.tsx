@@ -70,7 +70,10 @@ export default function Setup() {
           return (
             <button
               key={card.id}
-              onClick={() => setMode(card.id)}
+             onClick={() => {
+  setMode(card.id);
+  go('search');
+}}
               className={`flex-1 rounded-2xl border-2 p-4 text-left transition-all active:scale-[0.98] ${
                 selected
                   ? 'border-primary-600 bg-primary-50 shadow-card'

@@ -2,11 +2,16 @@
 import os
 import json
 import hashlib
+import threading
 import requests
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+
+# --------------------------------------------------
+# CONFIGURATION
+# --------------------------------------------------
 
 OVERPASS_SERVERS = [
     "https://overpass-api.de/api/interpreter",
@@ -19,6 +24,16 @@ CACHE_DIR = os.path.join(BASE_DIR, "osm_cache")
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# Cache remains fresh for 24 hours.
+CACHE_TTL_SECONDS = 24 * 60 * 60
+
+# Prevent multiple simultaneous refreshes.
+CACHE_LOCK = threading.Lock()
+
+
+# --------------------------------------------------
+# OPENSTREETMAP QUERY
+# --------------------------------------------------
 
 OVERPASS_QUERY = """
 [out:json][timeout:20];
@@ -43,6 +58,10 @@ OVERPASS_QUERY = """
 out center;
 """
 
+
+# --------------------------------------------------
+# CACHE FUNCTIONS
+# --------------------------------------------------
 
 def get_cache_path(
     latitude: float,
@@ -87,6 +106,35 @@ def load_cached_points(cache_path: str):
     return None
 
 
+def is_cache_fresh(cache_path: str) -> bool:
+
+    if not os.path.exists(cache_path):
+        return False
+
+    try:
+        with open(cache_path, "r", encoding="utf-8") as file:
+            cached_data = json.load(file)
+
+        saved_at = cached_data.get("saved_at")
+
+        if not saved_at:
+            return False
+
+        saved_time = datetime.fromisoformat(saved_at)
+
+        if saved_time.tzinfo is None:
+            saved_time = saved_time.replace(tzinfo=timezone.utc)
+
+        age_seconds = (
+            datetime.now(timezone.utc) - saved_time
+        ).total_seconds()
+
+        return 0 <= age_seconds < CACHE_TTL_SECONDS
+
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        return False
+
+
 def save_cached_points(
     cache_path: str,
     points: List[Dict[str, Any]],
@@ -129,6 +177,10 @@ def save_cached_points(
             except OSError:
                 pass
 
+
+# --------------------------------------------------
+# ACCESSIBILITY CLASSIFICATION
+# --------------------------------------------------
 
 def classify_osm_element(tags: Dict[str, Any]):
 
@@ -178,31 +230,16 @@ def classify_osm_element(tags: Dict[str, Any]):
     return None
 
 
-def get_osm_accessibility_points(
+# --------------------------------------------------
+# FETCH OPENSTREETMAP DATA
+# --------------------------------------------------
+
+def fetch_osm_points(
     latitude: float,
     longitude: float,
-    radius: int = 1000,
+    radius: int,
+    query: str,
 ) -> List[Dict[str, Any]]:
-
-    if not -90 <= latitude <= 90:
-        raise ValueError("Invalid latitude")
-
-    if not -180 <= longitude <= 180:
-        raise ValueError("Invalid longitude")
-
-    radius = max(100, min(radius, 5000))
-
-    cache_path = get_cache_path(
-        latitude,
-        longitude,
-        radius,
-    )
-
-    query = OVERPASS_QUERY.format(
-        radius=radius,
-        latitude=latitude,
-        longitude=longitude,
-    )
 
     errors = []
 
@@ -274,11 +311,6 @@ def get_osm_accessibility_points(
                         "tags": tags,
                     })
 
-                save_cached_points(
-                    cache_path,
-                    points,
-                )
-
                 print(
                     "OpenStreetMap data retrieved successfully. "
                     f"Found {len(points)} points."
@@ -294,20 +326,99 @@ def get_osm_accessibility_points(
                 error_message = f"{server}: {str(error)}"
                 errors.append(error_message)
 
-                print(
-                    f"Server failed: {error_message}"
-                )
+                print(f"Server failed: {error_message}")
 
     finally:
         session.close()
 
-    cached_points = load_cached_points(cache_path)
-
-    if cached_points is not None:
-        return cached_points
-
     raise requests.exceptions.RequestException(
-        "All OpenStreetMap servers failed and no cached "
-        "accessibility data is available. "
+        "All OpenStreetMap servers failed. "
         + " | ".join(errors)
     )
+
+
+# --------------------------------------------------
+# MAIN ACCESSIBILITY DATA FUNCTION
+# --------------------------------------------------
+
+def get_osm_accessibility_points(
+    latitude: float,
+    longitude: float,
+    radius: int = 1000,
+) -> List[Dict[str, Any]]:
+
+    if not -90 <= latitude <= 90:
+        raise ValueError("Invalid latitude")
+
+    if not -180 <= longitude <= 180:
+        raise ValueError("Invalid longitude")
+
+    radius = max(100, min(radius, 5000))
+
+    cache_path = get_cache_path(
+        latitude,
+        longitude,
+        radius,
+    )
+
+    # STEP 1: Return fresh cache immediately.
+    if is_cache_fresh(cache_path):
+
+        cached_points = load_cached_points(cache_path)
+
+        if cached_points is not None:
+            print("OSM cache is fresh. Skipping Overpass request.")
+            return cached_points
+
+    # STEP 2: Lock refresh to avoid duplicate requests.
+    with CACHE_LOCK:
+
+        # Another request may have refreshed the cache
+        # while this request was waiting for the lock.
+        if is_cache_fresh(cache_path):
+
+            cached_points = load_cached_points(cache_path)
+
+            if cached_points is not None:
+                print("OSM cache was refreshed by another request.")
+                return cached_points
+
+        # STEP 3: Prepare Overpass query.
+        query = OVERPASS_QUERY.format(
+            radius=radius,
+            latitude=latitude,
+            longitude=longitude,
+        )
+
+        # STEP 4: Fetch new data.
+        try:
+
+            points = fetch_osm_points(
+                latitude,
+                longitude,
+                radius,
+                query,
+            )
+
+            # Save successful results.
+            save_cached_points(
+                cache_path,
+                points,
+            )
+
+            return points
+
+        except requests.exceptions.RequestException as error:
+
+            print(f"All Overpass servers failed: {error}")
+
+            # STEP 5: Use old cache if available.
+            cached_points = load_cached_points(cache_path)
+
+            if cached_points is not None:
+                print(
+                    "Using older cached OSM data as fallback."
+                )
+                return cached_points
+
+            raise
