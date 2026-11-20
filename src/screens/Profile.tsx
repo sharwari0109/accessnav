@@ -125,12 +125,7 @@ export default function Profile() {
             )}
           </div>
 
-          <button
-            onClick={() => go('setup')}
-            className="mt-3 w-full rounded-xl bg-primary-50 py-3 text-sm font-bold text-primary-700"
-          >
-            Edit Preferences
-          </button>
+          
         </Section>
 
         <Section title="Navigation">
