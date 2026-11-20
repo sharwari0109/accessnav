@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useState,
+  useRef,
   type ReactNode,
   type Dispatch,
   type SetStateAction,
@@ -47,6 +48,7 @@ export interface User {
 interface AppState {
   screen: ScreenName;
   go: (s: ScreenName) => void;
+  goBack: () => void;
 
   user: User | null;
   setUser: (user: User | null) => void;
@@ -101,6 +103,9 @@ export function AppProvider({
 }) {
   const [screen, setScreen] = useState<ScreenName>('splash');
 
+  // Navigation history for the Android Back button.
+  const historyRef = useRef<ScreenName[]>([]);
+
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
@@ -128,10 +133,7 @@ export function AppProvider({
         JSON.stringify(preferences)
       );
     } catch (error) {
-      console.error(
-        'Could not save preferences:',
-        error
-      );
+      console.error('Could not save preferences:', error);
     }
   }, [preferences]);
 
@@ -166,10 +168,7 @@ export function AppProvider({
         String(highContrast)
       );
     } catch (error) {
-      console.error(
-        'Could not save High Contrast preference:',
-        error
-      );
+      console.error('Could not save High Contrast preference:', error);
     }
   }, [highContrast]);
 
@@ -211,10 +210,7 @@ export function AppProvider({
         String(largeText)
       );
     } catch (error) {
-      console.error(
-        'Could not save Large Text preference:',
-        error
-      );
+      console.error('Could not save Large Text preference:', error);
     }
   }, [largeText]);
 
@@ -226,10 +222,7 @@ export function AppProvider({
         String(voiceGuidance)
       );
     } catch (error) {
-      console.error(
-        'Could not save Voice Guidance preference:',
-        error
-      );
+      console.error('Could not save Voice Guidance preference:', error);
     }
   }, [voiceGuidance]);
 
@@ -251,6 +244,7 @@ export function AppProvider({
         if (cancelled) return;
 
         setUser(currentUser);
+        historyRef.current = [];
         setScreen('home');
       } catch (error) {
         if (cancelled) return;
@@ -258,6 +252,7 @@ export function AppProvider({
         console.error('Saved session is invalid:', error);
         removeToken();
         setUser(null);
+        historyRef.current = [];
         setScreen('splash');
       } finally {
         if (!cancelled) setAuthLoading(false);
@@ -271,17 +266,12 @@ export function AppProvider({
     };
   }, []);
 
-  const logout = () => {
-    removeToken();
-    setUser(null);
-    setDestination(null);
-    setNavStep(0);
-    setPaused(false);
-    setSosActive(false);
-    setScreen('login');
-  };
-
+  // Navigate to another screen and remember the current screen.
   const go = (nextScreen: ScreenName) => {
+    if (nextScreen === screen) return;
+
+    historyRef.current.push(screen);
+
     setScreen(nextScreen);
 
     if (nextScreen === 'navigation') {
@@ -289,15 +279,43 @@ export function AppProvider({
     }
   };
 
+  // Navigate back to the previous screen.
+  const goBack = () => {
+    const previousScreen = historyRef.current.pop();
+
+    if (previousScreen) {
+      setScreen(previousScreen);
+    }
+
+    // If there is no previous screen, stay where you are.
+    // In particular, pressing Back on Home won't close the app.
+  };
+
+  // Logout and clear navigation history.
+  const logout = () => {
+    removeToken();
+    setUser(null);
+    setDestination(null);
+    setNavStep(0);
+    setPaused(false);
+    setSosActive(false);
+
+    historyRef.current = [];
+    setScreen('login');
+  };
+
   return (
     <Ctx.Provider
       value={{
         screen,
         go,
+        goBack,
+
         user,
         setUser,
         authLoading,
         logout,
+
         mode,
         setMode,
 
@@ -324,10 +342,13 @@ export function AppProvider({
 
         selectedRoute,
         setSelectedRoute,
+
         navStep,
         setNavStep,
+
         paused,
         setPaused,
+
         sosActive,
         setSosActive,
       }}

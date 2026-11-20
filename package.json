@@ -13,6 +13,7 @@
   "dependencies": {
     "@capacitor-community/text-to-speech": "^8.0.2",
     "@capacitor/android": "^8.6.0",
+    "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.6.0",
     "@capacitor/geolocation": "^8.2.4",
     "@capacitor/ios": "^8.6.0",

@@ -1,4 +1,8 @@
-import { useEffect } from 'react';
+
+import { useEffect, useRef } from 'react';
+
+import { App as CapacitorApp } from '@capacitor/app';
+import type { PluginListenerHandle } from '@capacitor/core';
 
 import {
   AppProvider,
@@ -26,7 +30,6 @@ import type { ScreenName } from '@/types';
 
 import { checkBackend } from '@/api';
 
-
 // ============================================================
 // SCREEN MAP
 // ============================================================
@@ -35,125 +38,139 @@ const SCREENS: Record<
   ScreenName,
   () => JSX.Element | null
 > = {
-
   splash: Splash,
-
   welcome: Welcome,
-
   login: Login,
-
   register: Register,
-
   setup: Setup,
-
   home: Home,
-
   search: Search,
-
   destination: Destination,
-
   routes: Routes,
-
   navigation: Navigation,
-
   details: Details,
-
   report: Report,
-
   nearby: Nearby,
-
   saved: Saved,
-
   profile: Profile,
-
   sos: SOS,
 };
 
+// ============================================================
+// ANDROID BACK BUTTON HANDLER
+// ============================================================
+
+
+function AndroidBackButtonHandler() {
+  const { screen, goBack } = useApp();
+
+  const goBackRef = useRef(goBack);
+  const screenRef = useRef(screen);
+
+  useEffect(() => {
+    goBackRef.current = goBack;
+    screenRef.current = screen;
+  }, [goBack, screen]);
+
+  useEffect(() => {
+    let listener: PluginListenerHandle | undefined;
+    let mounted = true;
+
+    CapacitorApp.addListener('backButton', () => {
+      if (screenRef.current === 'home') {
+        const shouldExit = window.confirm(
+          'Are you sure you want to exit AccessNav?'
+        );
+
+        if (shouldExit) {
+          void CapacitorApp.exitApp();
+        }
+
+        return;
+      }
+
+      goBackRef.current();
+    })
+      .then((handle) => {
+        if (mounted) {
+          listener = handle;
+        } else {
+          void handle.remove();
+        }
+      })
+      .catch((error) => {
+        console.error(
+          'Could not register Android Back button:',
+          error
+        );
+      });
+
+    return () => {
+      mounted = false;
+
+      if (listener) {
+        void listener.remove();
+      }
+    };
+  }, []);
+
+  return null;
+}
 
 // ============================================================
 // ROUTER
 // ============================================================
 
 function Router() {
-
   const {
     screen,
     authLoading,
   } = useApp();
 
-
-  // ----------------------------------------------------------
-  // While checking whether a previous login exists,
-  // show the splash screen.
-  // ----------------------------------------------------------
-
   if (authLoading) {
     return <Splash />;
   }
 
-
-  // ----------------------------------------------------------
-  // Render current screen
-  // ----------------------------------------------------------
-
-  const Screen =
-    SCREENS[screen] ?? Splash;
-
+  const Screen = SCREENS[screen] ?? Splash;
 
   return <Screen />;
 }
-
 
 // ============================================================
 // BACKEND CONNECTION TEST
 // ============================================================
 
 function BackendConnectionTest() {
-
   useEffect(() => {
-
     checkBackend()
-
       .then((data) => {
-
         console.log(
           'Backend connected successfully:',
           data
         );
-
       })
-
       .catch((error) => {
-
         console.error(
           'Backend connection failed:',
           error
         );
-
       });
-
   }, []);
-
 
   return null;
 }
-
 
 // ============================================================
 // APP
 // ============================================================
 
 function App() {
-
   return (
     <AppProvider>
 
-      {/* ----------------------------------------------------
-          Test connection between React and FastAPI
-      ----------------------------------------------------- */}
+      <AndroidBackButtonHandler />
 
       <BackendConnectionTest />
-
 
       <div
         className="
@@ -166,12 +183,6 @@ function App() {
           sm:p-6
         "
       >
-
-        {/* --------------------------------------------------
-            Phone frame
-            390 × 844
-        --------------------------------------------------- */}
-
         <div
           className="
             relative
@@ -179,7 +190,6 @@ function App() {
             w-full
             overflow-hidden
             bg-white
-
             sm:h-[844px]
             sm:max-h-[100dvh]
             sm:w-[390px]
@@ -189,11 +199,6 @@ function App() {
             sm:ring-slate-900
           "
         >
-
-          {/* ------------------------------------------------
-              Notch - desktop only
-          ------------------------------------------------- */}
-
           <div
             className="
               pointer-events-none
@@ -211,20 +216,13 @@ function App() {
             "
           />
 
-
-          {/* ------------------------------------------------
-              Application screens
-          ------------------------------------------------- */}
-
           <Router />
 
         </div>
-
       </div>
 
     </AppProvider>
   );
 }
-
 
 export default App;
